@@ -1,0 +1,28 @@
+node_modules/
+dist/
+.vite/
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+vite-dev.out.log
+vite-dev.err.log
+
+# Local tooling folders
+.claude/
+.playwright-mcp/
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# TypeScript build info
+*.tsbuildinfo
