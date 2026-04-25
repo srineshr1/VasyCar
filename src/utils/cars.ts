@@ -7,8 +7,10 @@ import {
   nearestT,
   intersectionAhead,
   highwayLightState,
+  crossLightState,
   NUM_LANES,
   HALF_ROAD_WIDTH,
+  CROSS_HALF_LENGTH,
 } from './highway';
 
 export const CAR_COLORS = [
@@ -31,6 +33,11 @@ export const ACCEL = 9;
 export const BRAKE = 14;
 export const FRICTION = 2.5;
 export const TURN_RATE = 2.4;
+
+const DEFAULT_CAR_WIDTH = 0.55;
+const DEFAULT_CAR_LENGTH = 0.95;
+const HIGHWAY_STOP_FROM_CENTER = HALF_ROAD_WIDTH + DEFAULT_CAR_LENGTH * 0.65;
+const CROSS_STOP_FROM_CENTER = HALF_ROAD_WIDTH + DEFAULT_CAR_LENGTH * 0.65;
 
 export interface PlayerCar {
   x: number;
@@ -58,6 +65,22 @@ export interface AICar {
   targetSpeed: number;
 }
 
+export interface CrossTrafficCar {
+  id: number;
+  intersectionId: number;
+  side: -1 | 1;
+  progress: number;
+  laneOffset: number;
+  x: number;
+  y: number;
+  heading: number;
+  speed: number;
+  targetSpeed: number;
+  width: number;
+  length: number;
+  color: string;
+}
+
 export interface Inputs {
   up: boolean;
   down: boolean;
@@ -73,8 +96,8 @@ export function createPlayer(world: World): PlayerCar {
     y: p.y,
     heading,
     speed: 0,
-    width: 0.55,
-    length: 0.95,
+    width: DEFAULT_CAR_WIDTH,
+    length: DEFAULT_CAR_LENGTH,
     color: PLAYER_COLOR,
   };
 }
@@ -91,8 +114,8 @@ export function createAICars(world: World, count: number): AICar[] {
       y: p.y,
       heading: headingAt(world, t),
       speed: 4 + Math.random() * 2,
-      width: 0.55,
-      length: 0.95,
+      width: DEFAULT_CAR_WIDTH,
+      length: DEFAULT_CAR_LENGTH,
       color: CAR_COLORS[i % CAR_COLORS.length],
       t,
       laneIdx: lane,
@@ -100,6 +123,44 @@ export function createAICars(world: World, count: number): AICar[] {
       laneChangeCooldown: 1 + Math.random() * 3,
       targetSpeed: 5 + Math.random() * 3,
     });
+  }
+  return cars;
+}
+
+function setCrossTrafficPose(car: CrossTrafficCar, world: World): void {
+  const ix = world.intersections[car.intersectionId];
+  const signedNormal = car.side * (CROSS_HALF_LENGTH - car.progress);
+  car.x = ix.x + ix.normalX * signedNormal + ix.tangentX * car.laneOffset;
+  car.y = ix.y + ix.normalY * signedNormal + ix.tangentY * car.laneOffset;
+  car.heading = Math.atan2(-ix.normalY * car.side, -ix.normalX * car.side);
+}
+
+export function createCrossTraffic(world: World): CrossTrafficCar[] {
+  const cars: CrossTrafficCar[] = [];
+  let id = 0;
+  for (const ix of world.intersections) {
+    for (const side of [-1, 1] as const) {
+      for (let queueIdx = 0; queueIdx < 2; queueIdx++) {
+        const car: CrossTrafficCar = {
+          id,
+          intersectionId: ix.id,
+          side,
+          progress: queueIdx * 6.4 + Math.random() * 2.4,
+          laneOffset: -side * 0.55,
+          x: ix.x,
+          y: ix.y,
+          heading: 0,
+          speed: 2 + Math.random() * 1.5,
+          targetSpeed: 3.8 + Math.random() * 1.4,
+          width: DEFAULT_CAR_WIDTH,
+          length: DEFAULT_CAR_LENGTH,
+          color: CAR_COLORS[(id + 3) % CAR_COLORS.length],
+        };
+        setCrossTrafficPose(car, world);
+        cars.push(car);
+        id++;
+      }
+    }
   }
   return cars;
 }
@@ -284,15 +345,15 @@ export function updateAICar(
     const safe = Math.max(0, (inLane.dist - 0.5) * 4);
     desired = Math.min(desired, safe, inLane.otherSpeed - 0.3);
   }
-  const ixAhead = intersectionAhead(world, car.t, 5.0);
+  const ixAhead = intersectionAhead(world, car.t, 9.0);
   if (ixAhead) {
     const state = highwayLightState(ixAhead.intersection, timeS);
-    const d = ixAhead.distTiles;
+    const d = ixAhead.distTiles - HIGHWAY_STOP_FROM_CENTER;
     if (state === 'red') {
-      if (d < 2.5) desired = 0;
-      else if (d < 5.0) desired = Math.min(desired, Math.max(0, (d - 0.5) * 3));
-    } else if (state === 'yellow' && d < 2.0) {
-      desired = Math.min(desired, 0.5);
+      if (d > -0.25 && d < 0.45) desired = 0;
+      else if (d > 0 && d < 6.0) desired = Math.min(desired, Math.max(0, (d - 0.25) * 2.6));
+    } else if (state === 'yellow' && d > -0.25 && d < 3.5) {
+      desired = Math.min(desired, Math.max(0, (d - 0.2) * 2.2));
     }
   }
   if (desired < 0) desired = 0;
@@ -306,6 +367,63 @@ export function updateAICar(
   car.x = p.x;
   car.y = p.y;
   car.heading = headingAt(world, car.t);
+}
+
+function crossCarAhead(
+  car: CrossTrafficCar,
+  others: CrossTrafficCar[],
+): { dist: number; speed: number } {
+  let dist = Infinity;
+  let speed = Infinity;
+  for (const other of others) {
+    if (other.id === car.id) continue;
+    if (other.intersectionId !== car.intersectionId || other.side !== car.side) continue;
+    const ahead = other.progress - car.progress;
+    if (ahead > 0.05 && ahead < dist) {
+      dist = ahead;
+      speed = other.speed;
+    }
+  }
+  return { dist, speed };
+}
+
+export function updateCrossTrafficCar(
+  car: CrossTrafficCar,
+  dt: number,
+  world: World,
+  others: CrossTrafficCar[],
+  timeS: number,
+): void {
+  const ix = world.intersections[car.intersectionId];
+  const state = crossLightState(ix, timeS);
+  let desired = car.targetSpeed;
+
+  const stopProgress = CROSS_HALF_LENGTH - CROSS_STOP_FROM_CENTER;
+  const distToStop = stopProgress - car.progress;
+  if (state !== 'green' && distToStop > -0.25) {
+    if (distToStop < 0.45) desired = 0;
+    else if (distToStop < 5.5) desired = Math.min(desired, Math.max(0, (distToStop - 0.25) * 2.4));
+  }
+
+  const ahead = crossCarAhead(car, others);
+  if (ahead.dist < 3.4) {
+    const safe = Math.max(0, (ahead.dist - 1.1) * 2.4);
+    desired = Math.min(desired, safe, ahead.speed);
+  }
+
+  if (desired > car.speed) car.speed = Math.min(desired, car.speed + ACCEL * 0.55 * dt);
+  else car.speed = Math.max(desired, car.speed - BRAKE * 0.75 * dt);
+  if (car.speed < 0) car.speed = 0;
+
+  car.progress += car.speed * dt;
+  const routeLength = CROSS_HALF_LENGTH * 2 + 5;
+  if (car.progress > routeLength) {
+    car.progress = -4 - Math.random() * 5;
+    car.targetSpeed = 3.8 + Math.random() * 1.4;
+    car.speed = Math.min(car.speed, car.targetSpeed);
+  }
+
+  setCrossTrafficPose(car, world);
 }
 
 export interface ViolationFlag {

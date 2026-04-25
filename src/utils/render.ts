@@ -10,7 +10,7 @@ import {
   highwayLightState,
   crossLightState,
 } from './highway';
-import { PlayerCar, AICar } from './cars';
+import { PlayerCar, AICar, CrossTrafficCar } from './cars';
 
 export interface Camera {
   tx: number;
@@ -258,7 +258,6 @@ export function buildBackgroundCache(world: World): RenderCache {
   drawShoulders(ctx, world, offsetX, offsetY);
   drawLaneMarkings(ctx, world, offsetX, offsetY);
   drawCrossRoads(ctx, world, offsetX, offsetY);
-  drawScenery(ctx, world, offsetX, offsetY);
 
   return { bg: canvas, offsetX, offsetY };
 }
@@ -388,18 +387,39 @@ function drawLaneMarkings(
   }
 }
 
-function drawScenery(
+function drawSceneryItem(
   ctx: CanvasRenderingContext2D,
-  world: World,
+  s: SceneryItem,
   ox: number,
   oy: number,
 ): void {
-  const sorted = [...world.scenery].sort((a, b) => a.x + a.y - (b.x + b.y));
-  for (const s of sorted) {
-    if (s.type === 'tree') drawTree(ctx, s, ox, oy);
-    else if (s.type === 'building') drawBuilding(ctx, s, ox, oy);
-    else drawSign(ctx, s, ox, oy);
-  }
+  if (s.type === 'tree') drawTree(ctx, s, ox, oy);
+  else if (s.type === 'building') drawBuilding(ctx, s, ox, oy);
+  else drawSign(ctx, s, ox, oy);
+}
+
+function sceneryDepth(s: SceneryItem): number {
+  if (s.type === 'building') return s.x + s.y + s.size;
+  if (s.type === 'tree') return s.x + s.y + s.size * 0.3;
+  return s.x + s.y + 0.2;
+}
+
+function sceneryIsVisible(
+  s: SceneryItem,
+  cam: Camera,
+  W: number,
+  H: number,
+): boolean {
+  const p = project(s.x, s.y, cam, W, H);
+  const radius = s.type === 'building'
+    ? Math.max(70, s.size * TILE_W * 1.2 + s.height * TILE_H * 1.8)
+    : Math.max(35, s.size * TILE_W * 0.8 + s.height * TILE_H * 1.8);
+  return (
+    p.x > -radius &&
+    p.x < W + radius &&
+    p.y > -radius * 1.8 &&
+    p.y < H + radius
+  );
 }
 
 function drawTree(
@@ -527,107 +547,219 @@ function project(
   return { x: sx - cx + W / 2, y: sy - cy + H / 2 };
 }
 
-function drawCar(
+type RenderCar = {
+  x: number;
+  y: number;
+  heading: number;
+  width: number;
+  length: number;
+  color: string;
+};
+
+type ScreenPoint = { x: number; y: number };
+
+function drawPoly(
   ctx: CanvasRenderingContext2D,
-  car: { x: number; y: number; heading: number; width: number; length: number; color: string },
+  points: ScreenPoint[],
+  fill: string,
+  stroke?: string,
+  lineWidth = 1,
+): void {
+  if (points.length === 0) return;
+  ctx.beginPath();
+  ctx.moveTo(points[0].x, points[0].y);
+  for (let i = 1; i < points.length; i++) ctx.lineTo(points[i].x, points[i].y);
+  ctx.closePath();
+  ctx.fillStyle = fill;
+  ctx.fill();
+  if (stroke) {
+    ctx.strokeStyle = stroke;
+    ctx.lineWidth = lineWidth;
+    ctx.stroke();
+  }
+}
+
+function localCarPoint(car: RenderCar, along: number, side: number): { x: number; y: number } {
+  const cosH = Math.cos(car.heading);
+  const sinH = Math.sin(car.heading);
+  return {
+    x: car.x + cosH * along - sinH * side,
+    y: car.y + sinH * along + cosH * side,
+  };
+}
+
+function projectCarPoint(
+  car: RenderCar,
+  along: number,
+  side: number,
+  liftPx: number,
+  cam: Camera,
+  W: number,
+  H: number,
+): ScreenPoint {
+  const p = localCarPoint(car, along, side);
+  const screen = project(p.x, p.y, cam, W, H);
+  return { x: screen.x, y: screen.y - liftPx };
+}
+
+function drawCarWheel(
+  ctx: CanvasRenderingContext2D,
+  car: RenderCar,
+  along: number,
+  side: number,
   cam: Camera,
   W: number,
   H: number,
 ): void {
-  const cosH = Math.cos(car.heading);
-  const sinH = Math.sin(car.heading);
-  const L = car.length / 2;
-  const Wd = car.width / 2;
+  const center = projectCarPoint(car, along, side, 2, cam, W, H);
+  const front = projectCarPoint(car, along + 0.15, side, 2, cam, W, H);
+  const rear = projectCarPoint(car, along - 0.15, side, 2, cam, W, H);
+  const angle = Math.atan2(front.y - rear.y, front.x - rear.x);
 
-  const corners = [
-    { x: car.x + cosH * L - sinH * Wd, y: car.y + sinH * L + cosH * Wd },
-    { x: car.x + cosH * L + sinH * Wd, y: car.y + sinH * L - cosH * Wd },
-    { x: car.x - cosH * L + sinH * Wd, y: car.y - sinH * L - cosH * Wd },
-    { x: car.x - cosH * L - sinH * Wd, y: car.y - sinH * L + cosH * Wd },
-  ];
+  ctx.save();
+  ctx.translate(center.x, center.y);
+  ctx.rotate(angle);
+  ctx.fillStyle = '#111217';
+  ctx.beginPath();
+  ctx.ellipse(0, 0, 5.4, 2.8, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = '#6d737c';
+  ctx.beginPath();
+  ctx.ellipse(0.2, -0.1, 2.1, 1.0, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+}
 
-  const projected = corners.map((c) => project(c.x, c.y, cam, W, H));
+function drawCar(
+  ctx: CanvasRenderingContext2D,
+  car: RenderCar,
+  cam: Camera,
+  W: number,
+  H: number,
+): void {
+  const L = Math.max(car.length * 0.62, 0.6);
+  const Wd = Math.max(car.width * 0.62, 0.34);
+  const bodyLift = 7;
+  const cabinLift = 8;
+  const outline = shade(car.color, 0.42);
+
+  const base = {
+    fl: projectCarPoint(car, L, Wd, 0, cam, W, H),
+    fr: projectCarPoint(car, L, -Wd, 0, cam, W, H),
+    rr: projectCarPoint(car, -L, -Wd, 0, cam, W, H),
+    rl: projectCarPoint(car, -L, Wd, 0, cam, W, H),
+  };
+  const deck = {
+    fl: projectCarPoint(car, L, Wd, bodyLift, cam, W, H),
+    fr: projectCarPoint(car, L, -Wd, bodyLift, cam, W, H),
+    rr: projectCarPoint(car, -L, -Wd, bodyLift, cam, W, H),
+    rl: projectCarPoint(car, -L, Wd, bodyLift, cam, W, H),
+  };
   const center = project(car.x, car.y, cam, W, H);
+  const projectedNose = projectCarPoint(car, L * 0.9, 0, bodyLift, cam, W, H);
+  const projectedTail = projectCarPoint(car, -L * 0.9, 0, bodyLift, cam, W, H);
 
   ctx.save();
   ctx.fillStyle = 'rgba(0,0,0,0.28)';
   ctx.beginPath();
-  ctx.ellipse(center.x, center.y + 4, TILE_W * 0.34, TILE_H * 0.36, 0, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.restore();
-
-  const lift = 4;
-  const top = projected.map((p) => ({ x: p.x, y: p.y - lift }));
-
-  ctx.fillStyle = shade(car.color, 0.75);
-  ctx.beginPath();
-  ctx.moveTo(projected[1].x, projected[1].y);
-  ctx.lineTo(projected[2].x, projected[2].y);
-  ctx.lineTo(top[2].x, top[2].y);
-  ctx.lineTo(top[1].x, top[1].y);
-  ctx.closePath();
+  ctx.ellipse(
+    center.x + 1.5,
+    center.y + 6,
+    TILE_W * 0.32,
+    TILE_H * 0.26,
+    Math.atan2(projectedNose.y - projectedTail.y, projectedNose.x - projectedTail.x),
+    0,
+    Math.PI * 2,
+  );
   ctx.fill();
 
-  ctx.fillStyle = shade(car.color, 0.6);
-  ctx.beginPath();
-  ctx.moveTo(projected[2].x, projected[2].y);
-  ctx.lineTo(projected[3].x, projected[3].y);
-  ctx.lineTo(top[3].x, top[3].y);
-  ctx.lineTo(top[2].x, top[2].y);
-  ctx.closePath();
-  ctx.fill();
+  const wheelSide = Wd * 1.07;
+  drawCarWheel(ctx, car, L * 0.62, wheelSide, cam, W, H);
+  drawCarWheel(ctx, car, -L * 0.62, wheelSide, cam, W, H);
+  drawCarWheel(ctx, car, L * 0.62, -wheelSide, cam, W, H);
+  drawCarWheel(ctx, car, -L * 0.62, -wheelSide, cam, W, H);
 
-  ctx.fillStyle = car.color;
-  ctx.beginPath();
-  ctx.moveTo(top[0].x, top[0].y);
-  ctx.lineTo(top[1].x, top[1].y);
-  ctx.lineTo(top[2].x, top[2].y);
-  ctx.lineTo(top[3].x, top[3].y);
-  ctx.closePath();
-  ctx.fill();
-  ctx.strokeStyle = shade(car.color, 0.5);
-  ctx.lineWidth = 1;
-  ctx.stroke();
+  drawPoly(ctx, [base.fr, base.rr, deck.rr, deck.fr], shade(car.color, 0.56), outline);
+  drawPoly(ctx, [base.rr, base.rl, deck.rl, deck.rr], shade(car.color, 0.48), outline);
+  drawPoly(ctx, [base.rl, base.fl, deck.fl, deck.rl], shade(car.color, 0.68), outline);
+  drawPoly(ctx, [base.fl, base.fr, deck.fr, deck.fl], shade(car.color, 0.86), outline);
+  drawPoly(ctx, [deck.fl, deck.fr, deck.rr, deck.rl], car.color, outline);
 
-  const fLeft = {
-    x: car.x + cosH * L * 0.3 - sinH * Wd * 0.85,
-    y: car.y + sinH * L * 0.3 + cosH * Wd * 0.85,
-  };
-  const fRight = {
-    x: car.x + cosH * L * 0.3 + sinH * Wd * 0.85,
-    y: car.y + sinH * L * 0.3 - cosH * Wd * 0.85,
-  };
-  const bLeft = {
-    x: car.x - cosH * L * 0.1 - sinH * Wd * 0.85,
-    y: car.y - sinH * L * 0.1 + cosH * Wd * 0.85,
-  };
-  const bRight = {
-    x: car.x - cosH * L * 0.1 + sinH * Wd * 0.85,
-    y: car.y - sinH * L * 0.1 - cosH * Wd * 0.85,
-  };
-  const ws = [fLeft, fRight, bRight, bLeft].map((c) => project(c.x, c.y, cam, W, H));
-  ctx.fillStyle = 'rgba(35,45,60,0.85)';
-  ctx.beginPath();
-  ctx.moveTo(ws[0].x, ws[0].y - lift);
-  for (let i = 1; i < 4; i++) ctx.lineTo(ws[i].x, ws[i].y - lift);
-  ctx.closePath();
-  ctx.fill();
-
-  const wheelOffsets = [
-    [L * 0.78, Wd * 1.05],
-    [L * 0.78, -Wd * 1.05],
-    [-L * 0.78, Wd * 1.05],
-    [-L * 0.78, -Wd * 1.05],
+  const hood = [
+    projectCarPoint(car, L * 0.88, Wd * 0.66, bodyLift + 0.7, cam, W, H),
+    projectCarPoint(car, L * 0.88, -Wd * 0.66, bodyLift + 0.7, cam, W, H),
+    projectCarPoint(car, L * 0.24, -Wd * 0.58, bodyLift + 0.7, cam, W, H),
+    projectCarPoint(car, L * 0.16, Wd * 0.58, bodyLift + 0.7, cam, W, H),
   ];
-  ctx.fillStyle = '#1a1a1f';
-  for (const [lx, ly] of wheelOffsets) {
-    const wx = car.x + cosH * lx - sinH * ly;
-    const wy = car.y + sinH * lx + cosH * ly;
-    const p = project(wx, wy, cam, W, H);
+  drawPoly(ctx, hood, 'rgba(255,255,255,0.13)');
+
+  const trunk = [
+    projectCarPoint(car, -L * 0.34, Wd * 0.58, bodyLift + 0.5, cam, W, H),
+    projectCarPoint(car, -L * 0.34, -Wd * 0.58, bodyLift + 0.5, cam, W, H),
+    projectCarPoint(car, -L * 0.86, -Wd * 0.64, bodyLift + 0.5, cam, W, H),
+    projectCarPoint(car, -L * 0.86, Wd * 0.64, bodyLift + 0.5, cam, W, H),
+  ];
+  drawPoly(ctx, trunk, 'rgba(0,0,0,0.08)');
+
+  const cabinBase = {
+    fl: projectCarPoint(car, L * 0.28, Wd * 0.66, bodyLift, cam, W, H),
+    fr: projectCarPoint(car, L * 0.28, -Wd * 0.66, bodyLift, cam, W, H),
+    rr: projectCarPoint(car, -L * 0.42, -Wd * 0.66, bodyLift, cam, W, H),
+    rl: projectCarPoint(car, -L * 0.42, Wd * 0.66, bodyLift, cam, W, H),
+  };
+  const cabinRoof = {
+    fl: projectCarPoint(car, L * 0.12, Wd * 0.42, bodyLift + cabinLift, cam, W, H),
+    fr: projectCarPoint(car, L * 0.12, -Wd * 0.42, bodyLift + cabinLift, cam, W, H),
+    rr: projectCarPoint(car, -L * 0.26, -Wd * 0.42, bodyLift + cabinLift, cam, W, H),
+    rl: projectCarPoint(car, -L * 0.26, Wd * 0.42, bodyLift + cabinLift, cam, W, H),
+  };
+  const glass = 'rgba(28,43,58,0.9)';
+  const glassStroke = 'rgba(225,242,255,0.42)';
+
+  drawPoly(ctx, [cabinBase.fr, cabinBase.rr, cabinRoof.rr, cabinRoof.fr], glass, glassStroke, 0.8);
+  drawPoly(ctx, [cabinBase.rl, cabinBase.fl, cabinRoof.fl, cabinRoof.rl], 'rgba(38,57,76,0.92)', glassStroke, 0.8);
+  drawPoly(ctx, [cabinBase.fl, cabinBase.fr, cabinRoof.fr, cabinRoof.fl], 'rgba(53,78,96,0.92)', glassStroke, 0.8);
+  drawPoly(ctx, [cabinBase.rr, cabinBase.rl, cabinRoof.rl, cabinRoof.rr], 'rgba(20,32,44,0.92)', glassStroke, 0.8);
+  drawPoly(ctx, [cabinRoof.fl, cabinRoof.fr, cabinRoof.rr, cabinRoof.rl], shade(car.color, 1.1), outline);
+
+  const roofHighlight = [
+    projectCarPoint(car, L * 0.04, Wd * 0.26, bodyLift + cabinLift + 0.5, cam, W, H),
+    projectCarPoint(car, L * 0.04, -Wd * 0.24, bodyLift + cabinLift + 0.5, cam, W, H),
+    projectCarPoint(car, -L * 0.2, -Wd * 0.22, bodyLift + cabinLift + 0.5, cam, W, H),
+    projectCarPoint(car, -L * 0.18, Wd * 0.24, bodyLift + cabinLift + 0.5, cam, W, H),
+  ];
+  drawPoly(ctx, roofHighlight, 'rgba(255,255,255,0.16)');
+
+  const headlights = [
+    projectCarPoint(car, L * 1.02, Wd * 0.42, bodyLift - 1.5, cam, W, H),
+    projectCarPoint(car, L * 1.02, -Wd * 0.42, bodyLift - 1.5, cam, W, H),
+  ];
+  const taillights = [
+    projectCarPoint(car, -L * 1.02, Wd * 0.42, bodyLift - 1.5, cam, W, H),
+    projectCarPoint(car, -L * 1.02, -Wd * 0.42, bodyLift - 1.5, cam, W, H),
+  ];
+
+  ctx.fillStyle = '#fff4a8';
+  for (const p of headlights) {
     ctx.beginPath();
-    ctx.ellipse(p.x, p.y, 4, 2.2, 0, 0, Math.PI * 2);
+    ctx.ellipse(p.x, p.y, 2.3, 1.3, 0, 0, Math.PI * 2);
     ctx.fill();
   }
+  ctx.fillStyle = '#ff3d4f';
+  for (const p of taillights) {
+    ctx.beginPath();
+    ctx.ellipse(p.x, p.y, 2.2, 1.2, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  ctx.strokeStyle = 'rgba(255,255,255,0.24)';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(deck.fl.x, deck.fl.y);
+  ctx.lineTo(cabinBase.fl.x, cabinBase.fl.y);
+  ctx.lineTo(cabinRoof.fl.x, cabinRoof.fl.y);
+  ctx.stroke();
+  ctx.restore();
 }
 
 export function renderScene(
@@ -639,28 +771,54 @@ export function renderScene(
   cam: Camera,
   player: PlayerCar,
   ai: AICar[],
-  timeS: number,
+  crossTrafficOrTime: CrossTrafficCar[] | number,
+  timeSArg?: number,
 ): void {
+  const crossTraffic = Array.isArray(crossTrafficOrTime) ? crossTrafficOrTime : [];
+  const timeS = Array.isArray(crossTrafficOrTime) ? timeSArg ?? 0 : crossTrafficOrTime;
+
   ctx.fillStyle = SKY_COLOR;
   ctx.fillRect(0, 0, W, H);
 
   const camIso = pointIso(cam.tx, cam.ty);
   const bgX = W / 2 - camIso.x - cache.offsetX;
   const bgY = H / 2 - camIso.y - cache.offsetY;
+  const spriteOx = W / 2 - camIso.x;
+  const spriteOy = H / 2 - camIso.y;
   ctx.drawImage(cache.bg, bgX, bgY);
 
   type Sprite = { depth: number; draw: () => void };
   const sprites: Sprite[] = [];
 
+  for (const s of world.scenery) {
+    if (!sceneryIsVisible(s, cam, W, H)) continue;
+    sprites.push({
+      depth: sceneryDepth(s),
+      draw: () => drawSceneryItem(ctx, s, spriteOx, spriteOy),
+    });
+  }
+
   for (const ix of world.intersections) {
     const hwState = highwayLightState(ix, timeS);
     const crState = crossLightState(ix, timeS);
     const HRW = HALF_ROAD_WIDTH;
+    const signalSide = HALF_LANES + 0.5;
     const lightPositions: { x: number; y: number; state: 'green' | 'yellow' | 'red' }[] = [
-      { x: ix.x + ix.normalX * (HRW + 0.4) + ix.tangentX * (HRW + 0.4), y: ix.y + ix.normalY * (HRW + 0.4) + ix.tangentY * (HRW + 0.4), state: hwState },
-      { x: ix.x - ix.normalX * (HRW + 0.4) - ix.tangentX * (HRW + 0.4), y: ix.y - ix.normalY * (HRW + 0.4) - ix.tangentY * (HRW + 0.4), state: hwState },
-      { x: ix.x + ix.tangentX * (HRW + 0.4) - ix.normalX * (HRW + 0.4), y: ix.y + ix.tangentY * (HRW + 0.4) - ix.normalY * (HRW + 0.4), state: crState },
-      { x: ix.x - ix.tangentX * (HRW + 0.4) + ix.normalX * (HRW + 0.4), y: ix.y - ix.tangentY * (HRW + 0.4) + ix.normalY * (HRW + 0.4), state: crState },
+      {
+        x: ix.x - ix.tangentX * (HRW + 0.45) - ix.normalX * signalSide,
+        y: ix.y - ix.tangentY * (HRW + 0.45) - ix.normalY * signalSide,
+        state: hwState,
+      },
+      {
+        x: ix.x + ix.normalX * (HRW + 0.45) - ix.tangentX * signalSide,
+        y: ix.y + ix.normalY * (HRW + 0.45) - ix.tangentY * signalSide,
+        state: crState,
+      },
+      {
+        x: ix.x - ix.normalX * (HRW + 0.45) + ix.tangentX * signalSide,
+        y: ix.y - ix.normalY * (HRW + 0.45) + ix.tangentY * signalSide,
+        state: crState,
+      },
     ];
     for (const lp of lightPositions) {
       const lx = lp.x;
@@ -671,6 +829,13 @@ export function renderScene(
         draw: () => drawTrafficLight(ctx, lx, ly, cam, W, H, st),
       });
     }
+  }
+
+  for (const car of crossTraffic) {
+    sprites.push({
+      depth: car.x + car.y + 0.5,
+      draw: () => drawCar(ctx, car, cam, W, H),
+    });
   }
 
   for (const car of ai) {
@@ -695,8 +860,12 @@ export function drawMinimap(
   world: World,
   player: PlayerCar,
   ai: AICar[],
-  timeS: number,
+  crossTrafficOrTime: CrossTrafficCar[] | number,
+  timeSArg?: number,
 ): void {
+  const crossTraffic = Array.isArray(crossTrafficOrTime) ? crossTrafficOrTime : [];
+  const timeS = Array.isArray(crossTrafficOrTime) ? timeSArg ?? 0 : crossTrafficOrTime;
+
   ctx.clearRect(0, 0, w, h);
   ctx.fillStyle = '#1d1d22';
   ctx.fillRect(0, 0, w, h);
@@ -740,6 +909,13 @@ export function drawMinimap(
   for (const c of ai) {
     ctx.beginPath();
     ctx.arc(tx(c.x), ty(c.y), 2, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  ctx.fillStyle = '#d9f3ff';
+  for (const c of crossTraffic) {
+    ctx.beginPath();
+    ctx.arc(tx(c.x), ty(c.y), 1.8, 0, Math.PI * 2);
     ctx.fill();
   }
 

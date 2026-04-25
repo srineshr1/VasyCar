@@ -3,13 +3,16 @@ import { createHighway, World } from '../utils/highway';
 import {
   PlayerCar,
   AICar,
+  CrossTrafficCar,
   Inputs,
   ViolationFlag,
   ViolationState,
   createPlayer,
   createAICars,
+  createCrossTraffic,
   updatePlayer,
   updateAICar,
+  updateCrossTrafficCar,
   checkPlayerViolations,
   newViolationState,
   SPEED_TO_KMH,
@@ -27,6 +30,7 @@ interface GameRefs {
   cache: RenderCache;
   player: PlayerCar;
   ai: AICar[];
+  crossTraffic: CrossTrafficCar[];
   camera: Camera;
   inputs: Inputs;
   flag: ViolationFlag;
@@ -50,6 +54,7 @@ export function useGameLoop(
       cache,
       player,
       ai: createAICars(world, 8),
+      crossTraffic: createCrossTraffic(world),
       camera: { tx: player.x, ty: player.y },
       inputs: { up: false, down: false, left: false, right: false },
       flag: { active: false, message: '', age: 0 },
@@ -57,6 +62,8 @@ export function useGameLoop(
       audio: { ctx: null },
       honkPressed: false,
     };
+  } else if (!refs.current.crossTraffic) {
+    refs.current.crossTraffic = createCrossTraffic(refs.current.world);
   }
 
   const honk = useCallback(() => {
@@ -140,6 +147,7 @@ export function useGameLoop(
 
       updatePlayer(r.player, dt, r.inputs, r.world);
       for (const c of r.ai) updateAICar(c, dt, r.world, r.ai, r.player, timeS);
+      for (const c of r.crossTraffic) updateCrossTrafficCar(c, dt, r.world, r.crossTraffic, timeS);
       checkPlayerViolations(r.player, r.world, timeS, r.flag, dt, r.vstate);
 
       const lerp = 0.12;
@@ -153,14 +161,14 @@ export function useGameLoop(
           const dpr = window.devicePixelRatio || 1;
           const W = canvas.width / dpr;
           const H = canvas.height / dpr;
-          renderScene(ctx, W, H, r.world, r.cache, r.camera, r.player, r.ai, timeS);
+          renderScene(ctx, W, H, r.world, r.cache, r.camera, r.player, r.ai, r.crossTraffic, timeS);
         }
       }
 
       const minimap = minimapRef.current;
       if (minimap) {
         const mctx = minimap.getContext('2d');
-        if (mctx) drawMinimap(mctx, minimap.width, minimap.height, r.world, r.player, r.ai, timeS);
+        if (mctx) drawMinimap(mctx, minimap.width, minimap.height, r.world, r.player, r.ai, r.crossTraffic, timeS);
       }
 
       hudAcc += dt;
