@@ -7,6 +7,9 @@ import {
   HALF_ROAD_WIDTH,
   CROSS_HALF_LENGTH,
   SceneryItem,
+  InteractiveBuilding,
+  Collectible,
+  CityGrid,
   highwayLightState,
   crossLightState,
 } from './highway';
@@ -21,6 +24,19 @@ export interface RenderCache {
   bg: HTMLCanvasElement;
   offsetX: number;
   offsetY: number;
+}
+
+export interface SceneState {
+  world: World;
+  cache: RenderCache;
+  cam: Camera;
+  player: PlayerCar;
+  ai: AICar[];
+  crossTraffic: CrossTrafficCar[];
+  timeS: number;
+  collectibleStates?: boolean[];
+  missionMarker?: { x: number; y: number } | null;
+  nearBuildingId?: number | null;
 }
 
 const ASPHALT = '#3a3a42';
@@ -221,6 +237,61 @@ function drawTrafficLight(
   ctx.restore();
 }
 
+function drawCityGrid(
+  ctx: CanvasRenderingContext2D,
+  grid: CityGrid,
+  ox: number,
+  oy: number,
+): void {
+  const { xLines, yLines, halfWidth, xExtent, yExtent } = grid;
+  const SHOULDER = 0.4;
+  const laneEdge = halfWidth - SHOULDER;
+
+  // Horizontal streets (constant y value)
+  for (const y0 of yLines) {
+    drawQuadIso(ctx, [
+      { x: -xExtent, y: y0 - halfWidth },
+      { x: xExtent, y: y0 - halfWidth },
+      { x: xExtent, y: y0 + halfWidth },
+      { x: -xExtent, y: y0 + halfWidth },
+    ], ASPHALT, ox, oy);
+    for (const sign of [1, -1] as const) {
+      drawQuadIso(ctx, [
+        { x: -xExtent, y: y0 + sign * laneEdge },
+        { x: xExtent, y: y0 + sign * laneEdge },
+        { x: xExtent, y: y0 + sign * halfWidth },
+        { x: -xExtent, y: y0 + sign * halfWidth },
+      ], SHOULDER_COLOR, ox, oy);
+      drawLineIso(ctx, -xExtent, y0 + sign * laneEdge, xExtent, y0 + sign * laneEdge, EDGE_LINE, 1.5, ox, oy);
+    }
+    ctx.setLineDash([8, 8]);
+    drawLineIso(ctx, -xExtent, y0, xExtent, y0, MARKING_COLOR, 1.5, ox, oy);
+    ctx.setLineDash([]);
+  }
+
+  // Vertical streets (constant x value)
+  for (const x0 of xLines) {
+    drawQuadIso(ctx, [
+      { x: x0 - halfWidth, y: -yExtent },
+      { x: x0 + halfWidth, y: -yExtent },
+      { x: x0 + halfWidth, y: yExtent },
+      { x: x0 - halfWidth, y: yExtent },
+    ], ASPHALT, ox, oy);
+    for (const sign of [1, -1] as const) {
+      drawQuadIso(ctx, [
+        { x: x0 + sign * laneEdge, y: -yExtent },
+        { x: x0 + sign * halfWidth, y: -yExtent },
+        { x: x0 + sign * halfWidth, y: yExtent },
+        { x: x0 + sign * laneEdge, y: yExtent },
+      ], SHOULDER_COLOR, ox, oy);
+      drawLineIso(ctx, x0 + sign * laneEdge, -yExtent, x0 + sign * laneEdge, yExtent, EDGE_LINE, 1.5, ox, oy);
+    }
+    ctx.setLineDash([8, 8]);
+    drawLineIso(ctx, x0, -yExtent, x0, yExtent, MARKING_COLOR, 1.5, ox, oy);
+    ctx.setLineDash([]);
+  }
+}
+
 export function buildBackgroundCache(world: World): RenderCache {
   const corners = [
     pointIso(world.bounds.minX, world.bounds.minY),
@@ -254,6 +325,7 @@ export function buildBackgroundCache(world: World): RenderCache {
   ctx.fillStyle = GRASS_COLOR;
   ctx.fillRect(0, 0, w, h);
   drawGrassPattern(ctx, world, offsetX, offsetY);
+  drawCityGrid(ctx, world.cityGrid, offsetX, offsetY);
   drawAsphalt(ctx, world, offsetX, offsetY);
   drawShoulders(ctx, world, offsetX, offsetY);
   drawLaneMarkings(ctx, world, offsetX, offsetY);
@@ -762,20 +834,141 @@ function drawCar(
   ctx.restore();
 }
 
+const INTERACTIVE_COLORS: Record<string, string> = {
+  gas_station: '#f5c842',
+  upgrade_shop: '#42a5f5',
+  garage: '#8bc34a',
+};
+
+function drawInteractiveBuilding(
+  ctx: CanvasRenderingContext2D,
+  b: InteractiveBuilding,
+  showPrompt: boolean,
+  ox: number,
+  oy: number,
+  cam: Camera,
+  W: number,
+  H: number,
+): void {
+  const color = INTERACTIVE_COLORS[b.type] ?? '#ffffff';
+  const half = b.size;
+  const liftPx = b.height * TILE_H * 1.6;
+  const x1 = b.x - half;
+  const y1 = b.y - half;
+  const x2 = b.x + half;
+  const y2 = b.y + half;
+
+  const nGround = pointIso(x1, y1);
+  const eGround = pointIso(x2, y1);
+  const sGround = pointIso(x2, y2);
+  const wGround = pointIso(x1, y2);
+  const lift = (p: { x: number; y: number }) => ({ x: p.x, y: p.y - liftPx });
+  const nTop = lift(nGround);
+  const eTop = lift(eGround);
+  const sTop = lift(sGround);
+  const wTop = lift(wGround);
+
+  const stroke = shade(color, 0.5);
+  ctx.lineWidth = 1.5;
+  ctx.strokeStyle = stroke;
+
+  ctx.fillStyle = shade(color, 0.7);
+  ctx.beginPath();
+  ctx.moveTo(eGround.x + ox, eGround.y + oy);
+  ctx.lineTo(sGround.x + ox, sGround.y + oy);
+  ctx.lineTo(sTop.x + ox, sTop.y + oy);
+  ctx.lineTo(eTop.x + ox, eTop.y + oy);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+
+  ctx.fillStyle = shade(color, 0.55);
+  ctx.beginPath();
+  ctx.moveTo(wGround.x + ox, wGround.y + oy);
+  ctx.lineTo(sGround.x + ox, sGround.y + oy);
+  ctx.lineTo(sTop.x + ox, sTop.y + oy);
+  ctx.lineTo(wTop.x + ox, wTop.y + oy);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  ctx.moveTo(nTop.x + ox, nTop.y + oy);
+  ctx.lineTo(eTop.x + ox, eTop.y + oy);
+  ctx.lineTo(sTop.x + ox, sTop.y + oy);
+  ctx.lineTo(wTop.x + ox, wTop.y + oy);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+
+  const screen = project(b.x, b.y, cam, W, H);
+  const labelY = screen.y - liftPx - 14;
+
+  ctx.save();
+  ctx.font = 'bold 11px sans-serif';
+  ctx.textAlign = 'center';
+  const labelW = ctx.measureText(b.label).width + 10;
+  ctx.fillStyle = 'rgba(0,0,0,0.65)';
+  ctx.beginPath();
+  ctx.roundRect(screen.x - labelW / 2, labelY - 12, labelW, 16, 4);
+  ctx.fill();
+  ctx.fillStyle = color;
+  ctx.fillText(b.label, screen.x, labelY);
+
+  if (showPrompt) {
+    const promptY = labelY - 18;
+    const prompt = '[E] Enter';
+    const promptW = ctx.measureText(prompt).width + 10;
+    ctx.fillStyle = 'rgba(255,255,255,0.9)';
+    ctx.beginPath();
+    ctx.roundRect(screen.x - promptW / 2, promptY - 12, promptW, 16, 4);
+    ctx.fill();
+    ctx.fillStyle = '#222';
+    ctx.fillText(prompt, screen.x, promptY);
+  }
+  ctx.restore();
+}
+
+function drawCollectible(
+  ctx: CanvasRenderingContext2D,
+  c: Collectible,
+  ox: number,
+  oy: number,
+  timeS: number,
+): void {
+  const iso = pointIso(c.x, c.y);
+  const sx = iso.x + ox;
+  const sy = iso.y + oy - 10 - Math.sin(timeS * 2.5 + c.id) * 4;
+  const r = 9;
+  const spikes = 5;
+
+  ctx.save();
+  ctx.beginPath();
+  for (let i = 0; i < spikes * 2; i++) {
+    const angle = (i * Math.PI) / spikes - Math.PI / 2;
+    const radius = i % 2 === 0 ? r : r * 0.45;
+    const x = sx + Math.cos(angle) * radius;
+    const y = sy + Math.sin(angle) * radius;
+    if (i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  }
+  ctx.closePath();
+  ctx.fillStyle = '#ffd700';
+  ctx.fill();
+  ctx.strokeStyle = '#b8860b';
+  ctx.lineWidth = 1;
+  ctx.stroke();
+  ctx.restore();
+}
+
 export function renderScene(
   ctx: CanvasRenderingContext2D,
   W: number,
   H: number,
-  world: World,
-  cache: RenderCache,
-  cam: Camera,
-  player: PlayerCar,
-  ai: AICar[],
-  crossTrafficOrTime: CrossTrafficCar[] | number,
-  timeSArg?: number,
+  state: SceneState,
 ): void {
-  const crossTraffic = Array.isArray(crossTrafficOrTime) ? crossTrafficOrTime : [];
-  const timeS = Array.isArray(crossTrafficOrTime) ? timeSArg ?? 0 : crossTrafficOrTime;
+  const { world, cache, cam, player, ai, crossTraffic, timeS } = state;
 
   ctx.fillStyle = SKY_COLOR;
   ctx.fillRect(0, 0, W, H);
@@ -831,6 +1024,25 @@ export function renderScene(
     }
   }
 
+  for (const b of world.interactives) {
+    const showPrompt = state.nearBuildingId === b.id;
+    sprites.push({
+      depth: b.x + b.y + b.size,
+      draw: () => drawInteractiveBuilding(ctx, b, showPrompt, spriteOx, spriteOy, cam, W, H),
+    });
+  }
+
+  if (state.collectibleStates) {
+    for (let i = 0; i < world.collectibles.length; i++) {
+      if (state.collectibleStates[i]) continue;
+      const c = world.collectibles[i];
+      sprites.push({
+        depth: c.x + c.y + 0.3,
+        draw: () => drawCollectible(ctx, c, spriteOx, spriteOy, timeS),
+      });
+    }
+  }
+
   for (const car of crossTraffic) {
     sprites.push({
       depth: car.x + car.y + 0.5,
@@ -851,20 +1063,37 @@ export function renderScene(
 
   sprites.sort((a, b) => a.depth - b.depth);
   for (const s of sprites) s.draw();
+
+  if (state.missionMarker) {
+    const ms = project(state.missionMarker.x, state.missionMarker.y, cam, W, H);
+    ctx.save();
+    ctx.fillStyle = '#ff4444';
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(ms.x, ms.y - 28);
+    ctx.lineTo(ms.x + 10, ms.y - 14);
+    ctx.lineTo(ms.x - 10, ms.y - 14);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    const pulse = 0.7 + 0.3 * Math.sin(timeS * 4);
+    ctx.globalAlpha = pulse;
+    ctx.fillStyle = 'rgba(255,68,68,0.25)';
+    ctx.beginPath();
+    ctx.arc(ms.x, ms.y - 21, 18, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
 }
 
 export function drawMinimap(
   ctx: CanvasRenderingContext2D,
   w: number,
   h: number,
-  world: World,
-  player: PlayerCar,
-  ai: AICar[],
-  crossTrafficOrTime: CrossTrafficCar[] | number,
-  timeSArg?: number,
+  state: SceneState,
 ): void {
-  const crossTraffic = Array.isArray(crossTrafficOrTime) ? crossTrafficOrTime : [];
-  const timeS = Array.isArray(crossTrafficOrTime) ? timeSArg ?? 0 : crossTrafficOrTime;
+  const { world, player, ai, crossTraffic, timeS } = state;
 
   ctx.clearRect(0, 0, w, h);
   ctx.fillStyle = '#1d1d22';
@@ -916,6 +1145,34 @@ export function drawMinimap(
   for (const c of crossTraffic) {
     ctx.beginPath();
     ctx.arc(tx(c.x), ty(c.y), 1.8, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  if (state.collectibleStates) {
+    ctx.fillStyle = '#ffd700';
+    for (let i = 0; i < world.collectibles.length; i++) {
+      if (state.collectibleStates[i]) continue;
+      const c = world.collectibles[i];
+      ctx.beginPath();
+      ctx.arc(tx(c.x), ty(c.y), 2, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  for (const b of world.interactives) {
+    ctx.fillStyle = INTERACTIVE_COLORS[b.type] ?? '#fff';
+    ctx.fillRect(tx(b.x) - 3, ty(b.y) - 3, 6, 6);
+  }
+
+  if (state.missionMarker) {
+    const mx = tx(state.missionMarker.x);
+    const my = ty(state.missionMarker.y);
+    ctx.fillStyle = '#ff4444';
+    ctx.beginPath();
+    ctx.moveTo(mx, my - 7);
+    ctx.lineTo(mx + 4, my);
+    ctx.lineTo(mx - 4, my);
+    ctx.closePath();
     ctx.fill();
   }
 

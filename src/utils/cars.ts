@@ -6,6 +6,7 @@ import {
   advanceT,
   nearestT,
   intersectionAhead,
+  isOnCityStreet,
   highwayLightState,
   crossLightState,
   NUM_LANES,
@@ -262,14 +263,10 @@ export function updatePlayer(
     for (const s of world.scenery) {
       if (s.type === 'sign') continue;
       const half = s.size / 2;
-      if (
-        cx > s.x - half &&
-        cx < s.x + half &&
-        cy > s.y - half &&
-        cy < s.y + half
-      ) {
-        return true;
-      }
+      if (cx > s.x - half && cx < s.x + half && cy > s.y - half && cy < s.y + half) return true;
+    }
+    for (const b of world.interactives) {
+      if (cx > b.x - b.size && cx < b.x + b.size && cy > b.y - b.size && cy < b.y + b.size) return true;
     }
     return false;
   };
@@ -286,8 +283,8 @@ export function updatePlayer(
   }
 
   const near = nearestT(world, player.x, player.y);
-  if (near.lateralDist > HALF_ROAD_WIDTH) {
-    player.speed *= Math.pow(0.985, dt * 60);
+  if (near.lateralDist > HALF_ROAD_WIDTH && !isOnCityStreet(world, player.x, player.y)) {
+    player.speed *= Math.pow(0.992, dt * 60);
   }
 }
 
@@ -435,13 +432,11 @@ export interface ViolationFlag {
 export interface ViolationState {
   lastWarned: number;
   wrongWayTime: number;
-  offRoadTime: number;
-  respawnTimer: number;
   lastRedLightId: number;
 }
 
 export function newViolationState(): ViolationState {
-  return { lastWarned: -10, wrongWayTime: 0, offRoadTime: 0, respawnTimer: 0, lastRedLightId: -99 };
+  return { lastWarned: -10, wrongWayTime: 0, lastRedLightId: -99 };
 }
 
 export function checkPlayerViolations(
@@ -479,32 +474,6 @@ export function checkPlayerViolations(
     prev.wrongWayTime = 0;
   }
 
-  if (near.lateralDist > HALF_ROAD_WIDTH) {
-    prev.offRoadTime += dt;
-    prev.respawnTimer += dt;
-  } else {
-    prev.offRoadTime = Math.max(0, prev.offRoadTime - dt * 2);
-    prev.respawnTimer = Math.max(0, prev.respawnTimer - dt * 2);
-  }
-  if (prev.respawnTimer >= 5.0) {
-    const p = positionOnLane(world, near.t, 1);
-    player.x = p.x;
-    player.y = p.y;
-    player.heading = headingAt(world, near.t);
-    player.speed = 0;
-    prev.offRoadTime = 0;
-    prev.respawnTimer = 0;
-    flag.active = true;
-    flag.age = 0;
-    flag.message = 'RESPAWNED on highway!';
-    prev.lastWarned = timeS;
-  } else if (prev.offRoadTime > 1.0 && timeS - prev.lastWarned > 2.5) {
-    flag.active = true;
-    flag.age = 0;
-    flag.message = 'OFF ROAD! Get back on the highway.';
-    prev.lastWarned = timeS;
-    prev.offRoadTime = 0;
-  }
 
   for (const ix of world.intersections) {
     const dotT = (player.x - ix.x) * ix.tangentX + (player.y - ix.y) * ix.tangentY;

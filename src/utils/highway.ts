@@ -10,7 +10,7 @@ export const CENTERLINE_RESOLUTION = 256;
 export const LIGHT_PERIOD = 20;
 export const LIGHT_HW_GREEN = 8;
 export const LIGHT_YELLOW = 2;
-export const CROSS_HALF_LENGTH = 32;
+export const CROSS_HALF_LENGTH = 60;
 
 export type SceneryType = 'tree' | 'building' | 'sign';
 
@@ -35,6 +35,33 @@ export interface Intersection {
   phaseOffset: number;
 }
 
+export type BuildingType = 'gas_station' | 'upgrade_shop' | 'garage';
+
+export interface InteractiveBuilding {
+  id: number;
+  type: BuildingType;
+  x: number;
+  y: number;
+  size: number;
+  height: number;
+  label: string;
+  intersectionId: number;
+}
+
+export interface Collectible {
+  id: number;
+  x: number;
+  y: number;
+}
+
+export interface CityGrid {
+  xLines: number[];
+  yLines: number[];
+  halfWidth: number;
+  xExtent: number;
+  yExtent: number;
+}
+
 export interface HighwayWorld {
   centerline: { x: number; y: number }[];
   tangents: { x: number; y: number }[];
@@ -46,6 +73,9 @@ export interface HighwayWorld {
   halfRoadWidth: number;
   scenery: SceneryItem[];
   intersections: Intersection[];
+  interactives: InteractiveBuilding[];
+  collectibles: Collectible[];
+  cityGrid: CityGrid;
   bounds: { minX: number; maxX: number; minY: number; maxY: number };
 }
 
@@ -265,6 +295,61 @@ export function intersectionAhead(
   return best;
 }
 
+function generateCityGrid(): CityGrid {
+  return {
+    xLines: [-60, -40, -20, 0, 20, 40, 60],
+    yLines: [-28, -14, 0, 14, 28],
+    halfWidth: 1.5,
+    xExtent: 100,
+    yExtent: 40,
+  };
+}
+
+export function isOnCityStreet(world: World, x: number, y: number): boolean {
+  const { xLines, yLines, halfWidth, xExtent, yExtent } = world.cityGrid;
+  for (const y0 of yLines) {
+    if (Math.abs(y - y0) <= halfWidth && Math.abs(x) <= xExtent) return true;
+  }
+  for (const x0 of xLines) {
+    if (Math.abs(x - x0) <= halfWidth && Math.abs(y) <= yExtent) return true;
+  }
+  return false;
+}
+
+function generateInteractiveBuildings(intersections: Intersection[]): InteractiveBuilding[] {
+  const TYPES: BuildingType[] = ['gas_station', 'upgrade_shop', 'garage'];
+  const LABELS: Record<BuildingType, string> = { gas_station: 'Gas Station', upgrade_shop: 'Upgrade Shop', garage: 'Garage' };
+  const NORMAL_DIST = 25;
+  const TANGENT_OFFSET = HALF_ROAD_WIDTH + 5.0;
+  const buildings: InteractiveBuilding[] = [];
+  let idx = 0;
+  for (const ix of intersections) {
+    for (const side of [-1, 1] as const) {
+      for (const lat of [-1, 1] as const) {
+        const x = ix.x + ix.normalX * NORMAL_DIST * side + ix.tangentX * TANGENT_OFFSET * lat;
+        const y = ix.y + ix.normalY * NORMAL_DIST * side + ix.tangentY * TANGENT_OFFSET * lat;
+        const type = TYPES[idx % TYPES.length];
+        buildings.push({ id: idx, type, x, y, size: 2.0, height: 1.8, label: LABELS[type], intersectionId: ix.id });
+        idx++;
+      }
+    }
+  }
+  return buildings;
+}
+
+function generateCollectibles(centerline: { x: number; y: number }[], rand: () => number): Collectible[] {
+  const NUM = 20;
+  const step = Math.floor(centerline.length / NUM);
+  const collectibles: Collectible[] = [];
+  for (let i = 0; i < NUM; i++) {
+    const base = centerline[i * step];
+    const angle = rand() * Math.PI * 2;
+    const r = 8 + rand() * 30;
+    collectibles.push({ id: i, x: base.x + Math.cos(angle) * r, y: base.y + Math.sin(angle) * r });
+  }
+  return collectibles;
+}
+
 export function createHighway(seed = 7): HighwayWorld {
   const rand = rng(seed);
   const centerline = buildCenterline(rand);
@@ -272,6 +357,9 @@ export function createHighway(seed = 7): HighwayWorld {
   const { cumulativeLengths, totalLength } = buildCumulativeLengths(centerline);
   const intersections = generateIntersections(centerline, tangents);
   const scenery = generateScenery(centerline, tangents, rand);
+  const interactives = generateInteractiveBuildings(intersections);
+  const collectibles = generateCollectibles(centerline, rand);
+  const cityGrid = generateCityGrid();
   const bounds = computeBounds(centerline, scenery);
   return {
     centerline,
@@ -284,6 +372,9 @@ export function createHighway(seed = 7): HighwayWorld {
     halfRoadWidth: HALF_ROAD_WIDTH,
     intersections,
     scenery,
+    interactives,
+    collectibles,
+    cityGrid,
     bounds,
   };
 }
