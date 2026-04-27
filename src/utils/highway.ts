@@ -1,7 +1,7 @@
 export const TILE_W = 64;
 export const TILE_H = 32;
 
-export const NUM_LANES = 4;
+export const NUM_LANES = 5;
 export const LANE_WIDTH = 1.0;
 export const SHOULDER_WIDTH = 0.6;
 export const HALF_ROAD_WIDTH = (NUM_LANES * LANE_WIDTH) / 2 + SHOULDER_WIDTH;
@@ -92,23 +92,42 @@ function rng(seed: number): () => number {
   };
 }
 
-function buildCenterline(rand: () => number): { x: number; y: number }[] {
-  const rx = 130;
-  const ry = 52;
-  const phase1 = rand() * Math.PI * 2;
-  const phase2 = rand() * Math.PI * 2;
+function buildCenterline(_rand: () => number): { x: number; y: number }[] {
+  // Rectangular ring road: W=90, H=38, corner radius R=14
+  // Starts at (90,-24) = top of right side, travels CW: south → west → north → east
+  const W = 90, H = 38, R = 14;
+  const WR = W - R; // 76
+  const HR = H - R; // 24
+  const HP = Math.PI / 2;
+  const arcLen = HP * R;
+  const N = CENTERLINE_RESOLUTION;
+
+  type Seg = { len: number; pt: (u: number) => { x: number; y: number } };
+  const segs: Seg[] = [
+    { len: 2 * HR, pt: u => ({ x: W, y: -HR + u * 2 * HR }) },
+    { len: arcLen, pt: u => ({ x: WR + R * Math.cos(u * HP), y: HR + R * Math.sin(u * HP) }) },
+    { len: 2 * WR, pt: u => ({ x: WR - u * 2 * WR, y: H }) },
+    { len: arcLen, pt: u => ({ x: -WR + R * Math.cos(HP + u * HP), y: HR + R * Math.sin(HP + u * HP) }) },
+    { len: 2 * HR, pt: u => ({ x: -W, y: HR - u * 2 * HR }) },
+    { len: arcLen, pt: u => ({ x: -WR + R * Math.cos(Math.PI + u * HP), y: -HR + R * Math.sin(Math.PI + u * HP) }) },
+    { len: 2 * WR, pt: u => ({ x: -WR + u * 2 * WR, y: -H }) },
+    { len: arcLen, pt: u => ({ x: WR + R * Math.cos(3 * HP + u * HP), y: -HR + R * Math.sin(3 * HP + u * HP) }) },
+  ];
+
+  const totalLen = segs.reduce((s, seg) => s + seg.len, 0);
+  const spacing = totalLen / N;
   const points: { x: number; y: number }[] = [];
-  for (let i = 0; i < CENTERLINE_RESOLUTION; i++) {
-    const a = (i / CENTERLINE_RESOLUTION) * Math.PI * 2;
-    const baseX = rx * Math.cos(a);
-    const baseY = ry * Math.sin(a);
-    const wobble = 4.5 * Math.sin(a * 3 + phase1) + 2.8 * Math.sin(a * 5 + phase2);
-    const nxRaw = Math.cos(a) / rx;
-    const nyRaw = Math.sin(a) / ry;
-    const nlen = Math.hypot(nxRaw, nyRaw) || 1;
-    const nx = nxRaw / nlen;
-    const ny = nyRaw / nlen;
-    points.push({ x: baseX + nx * wobble, y: baseY + ny * wobble });
+  let segIdx = 0, segStart = 0;
+
+  for (let i = 0; i < N; i++) {
+    const target = i * spacing;
+    while (segIdx < segs.length - 1 && segStart + segs[segIdx].len <= target) {
+      segStart += segs[segIdx].len;
+      segIdx++;
+    }
+    const seg = segs[segIdx];
+    const u = seg.len > 0 ? Math.min(1, (target - segStart) / seg.len) : 0;
+    points.push(seg.pt(u));
   }
   return points;
 }
@@ -226,7 +245,9 @@ function generateIntersections(
   centerline: { x: number; y: number }[],
   tangents: { x: number; y: number }[],
 ): Intersection[] {
-  const tValues = [0.08, 0.25, 0.42, 0.60, 0.78];
+  // 8 intersections: right(y=0), bottom(x=60,0,-60), left(y=0), top(x=-60,0,60)
+  // t-values computed from arc-length positions on the rectangular ring road
+  const tValues = [0.0492, 0.1762, 0.2992, 0.4221, 0.5492, 0.6762, 0.7992, 0.9221];
   return tValues.map((t, id) => {
     const n = centerline.length;
     const tn = t * n;
@@ -296,12 +317,13 @@ export function intersectionAhead(
 }
 
 function generateCityGrid(): CityGrid {
+  // N-S streets at ring intersections; E-W streets inside; extents reach ring boundaries
   return {
-    xLines: [-60, -40, -20, 0, 20, 40, 60],
-    yLines: [-28, -14, 0, 14, 28],
+    xLines: [-60, 0, 60],
+    yLines: [-18, 0, 18],
     halfWidth: 1.5,
-    xExtent: 100,
-    yExtent: 40,
+    xExtent: 88,
+    yExtent: 35,
   };
 }
 
@@ -319,7 +341,7 @@ export function isOnCityStreet(world: World, x: number, y: number): boolean {
 function generateInteractiveBuildings(intersections: Intersection[]): InteractiveBuilding[] {
   const TYPES: BuildingType[] = ['gas_station', 'upgrade_shop', 'garage'];
   const LABELS: Record<BuildingType, string> = { gas_station: 'Gas Station', upgrade_shop: 'Upgrade Shop', garage: 'Garage' };
-  const NORMAL_DIST = 25;
+  const NORMAL_DIST = 65;
   const TANGENT_OFFSET = HALF_ROAD_WIDTH + 5.0;
   const buildings: InteractiveBuilding[] = [];
   let idx = 0;

@@ -451,12 +451,15 @@ function drawLaneMarkings(
   ox: number,
   oy: number,
 ): void {
+  // Outer solid yellow edges
   drawLineAtOffset(ctx, world, HALF_LANES, ox, oy, false, EDGE_LINE, 2.5);
   drawLineAtOffset(ctx, world, -HALF_LANES, ox, oy, false, EDGE_LINE, 2.5);
-  for (let k = 1; k < NUM_LANES; k++) {
-    const off = HALF_LANES - k * LANE_WIDTH;
-    drawLineAtOffset(ctx, world, off, ox, oy, true, MARKING_COLOR, 2);
-  }
+  // Dashed white dividers within each direction (lanes 0-1 and lanes 3-4)
+  drawLineAtOffset(ctx, world, HALF_LANES - LANE_WIDTH, ox, oy, true, MARKING_COLOR, 2);
+  drawLineAtOffset(ctx, world, -(HALF_LANES - LANE_WIDTH), ox, oy, true, MARKING_COLOR, 2);
+  // Double solid yellow median divider between directions
+  drawLineAtOffset(ctx, world, LANE_WIDTH / 2, ox, oy, false, EDGE_LINE, 2.5);
+  drawLineAtOffset(ctx, world, -LANE_WIDTH / 2, ox, oy, false, EDGE_LINE, 2.5);
 }
 
 function drawSceneryItem(

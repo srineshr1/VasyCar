@@ -64,6 +64,7 @@ export interface AICar {
   targetLane: number;
   laneChangeCooldown: number;
   targetSpeed: number;
+  reversed: boolean;
 }
 
 export interface CrossTrafficCar {
@@ -107,13 +108,16 @@ export function createAICars(world: World, count: number): AICar[] {
   const cars: AICar[] = [];
   for (let i = 0; i < count; i++) {
     const t = ((i + 0.5) / count + 0.04) % 1;
-    const lane = Math.floor(Math.random() * NUM_LANES);
+    const reversed = i % 2 === 1;
+    const lane = reversed
+      ? 3 + Math.floor(Math.random() * 2)
+      : Math.floor(Math.random() * 2);
     const p = positionOnLane(world, t, lane);
     cars.push({
       id: i,
       x: p.x,
       y: p.y,
-      heading: headingAt(world, t),
+      heading: headingAt(world, t) + (reversed ? Math.PI : 0),
       speed: 4 + Math.random() * 2,
       width: DEFAULT_CAR_WIDTH,
       length: DEFAULT_CAR_LENGTH,
@@ -123,6 +127,7 @@ export function createAICars(world: World, count: number): AICar[] {
       targetLane: lane,
       laneChangeCooldown: 1 + Math.random() * 3,
       targetSpeed: 5 + Math.random() * 3,
+      reversed,
     });
   }
   return cars;
@@ -300,14 +305,17 @@ export function updateAICar(
 
   const aligned = Math.abs(car.laneIdx - car.targetLane) < 0.05;
 
+  const minLane = car.reversed ? 3 : 0;
+  const maxLane = car.reversed ? NUM_LANES - 1 : 1;
+
   if (aligned && car.laneChangeCooldown <= 0) {
     const sameLaneAhead = aheadInLane(car, others, player, car.targetLane, 3.5);
     const blockedAhead =
       sameLaneAhead.dist < 3.5 && sameLaneAhead.otherSpeed < car.targetSpeed - 0.4;
     if (blockedAhead) {
       const candidates: number[] = [];
-      if (car.targetLane > 0) candidates.push(car.targetLane - 1);
-      if (car.targetLane < NUM_LANES - 1) candidates.push(car.targetLane + 1);
+      if (car.targetLane > minLane) candidates.push(car.targetLane - 1);
+      if (car.targetLane < maxLane) candidates.push(car.targetLane + 1);
       for (const lane of candidates) {
         if (!laneIsBlocked(car, others, lane)) {
           car.targetLane = lane;
@@ -319,8 +327,8 @@ export function updateAICar(
       const dir = Math.random() < 0.5 ? -1 : 1;
       const candidate = car.targetLane + dir;
       if (
-        candidate >= 0 &&
-        candidate < NUM_LANES &&
+        candidate >= minLane &&
+        candidate <= maxLane &&
         !laneIsBlocked(car, others, candidate)
       ) {
         car.targetLane = candidate;
@@ -342,15 +350,17 @@ export function updateAICar(
     const safe = Math.max(0, (inLane.dist - 0.5) * 4);
     desired = Math.min(desired, safe, inLane.otherSpeed - 0.3);
   }
-  const ixAhead = intersectionAhead(world, car.t, 9.0);
-  if (ixAhead) {
-    const state = highwayLightState(ixAhead.intersection, timeS);
-    const d = ixAhead.distTiles - HIGHWAY_STOP_FROM_CENTER;
-    if (state === 'red') {
-      if (d > -0.25 && d < 0.45) desired = 0;
-      else if (d > 0 && d < 6.0) desired = Math.min(desired, Math.max(0, (d - 0.25) * 2.6));
-    } else if (state === 'yellow' && d > -0.25 && d < 3.5) {
-      desired = Math.min(desired, Math.max(0, (d - 0.2) * 2.2));
+  if (!car.reversed) {
+    const ixAhead = intersectionAhead(world, car.t, 9.0);
+    if (ixAhead) {
+      const state = highwayLightState(ixAhead.intersection, timeS);
+      const d = ixAhead.distTiles - HIGHWAY_STOP_FROM_CENTER;
+      if (state === 'red') {
+        if (d > -0.25 && d < 0.45) desired = 0;
+        else if (d > 0 && d < 6.0) desired = Math.min(desired, Math.max(0, (d - 0.25) * 2.6));
+      } else if (state === 'yellow' && d > -0.25 && d < 3.5) {
+        desired = Math.min(desired, Math.max(0, (d - 0.2) * 2.2));
+      }
     }
   }
   if (desired < 0) desired = 0;
@@ -359,11 +369,11 @@ export function updateAICar(
   else car.speed = Math.max(desired, car.speed - BRAKE * 0.7 * dt);
   if (car.speed < 0) car.speed = 0;
 
-  car.t = advanceT(world, car.t, car.speed * dt);
+  car.t = advanceT(world, car.t, car.speed * (car.reversed ? -1 : 1) * dt);
   const p = positionOnLane(world, car.t, car.laneIdx);
   car.x = p.x;
   car.y = p.y;
-  car.heading = headingAt(world, car.t);
+  car.heading = headingAt(world, car.t) + (car.reversed ? Math.PI : 0);
 }
 
 function crossCarAhead(
@@ -461,7 +471,10 @@ export function checkPlayerViolations(
   const headDy = Math.sin(player.heading);
   const align = headDx * tangent.x + headDy * tangent.y;
 
-  if (align < -0.3 && Math.abs(player.speed) > 0.8) {
+  // 2-way road: wrong way = heading sign opposes lane side (CW lane going CCW, or CCW lane going CW)
+  const onHighway = near.lateralDist <= HALF_ROAD_WIDTH;
+  const wrongDir = onHighway && align * near.signedLateral < -0.09 && Math.abs(player.speed) > 0.8;
+  if (wrongDir) {
     prev.wrongWayTime += dt;
   } else {
     prev.wrongWayTime = Math.max(0, prev.wrongWayTime - dt * 2);
