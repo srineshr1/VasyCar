@@ -167,6 +167,7 @@ function generateScenery(
   centerline: { x: number; y: number }[],
   tangents: { x: number; y: number }[],
   rand: () => number,
+  intersections: Intersection[],
 ): SceneryItem[] {
   const items: SceneryItem[] = [];
   const n = centerline.length;
@@ -183,6 +184,14 @@ function generateScenery(
     const off = minOff + rand() * (maxOff - minOff);
     const x = c.x + nx * off * side;
     const y = c.y + ny * off * side;
+    const onCrossRoad = intersections.some((ix) => {
+      const dx = x - ix.x;
+      const dy = y - ix.y;
+      const projT = dx * ix.tangentX + dy * ix.tangentY;
+      const projN = dx * ix.normalX + dy * ix.normalY;
+      return Math.abs(projT) < HALF_ROAD_WIDTH + 1.6 && Math.abs(projN) < CROSS_HALF_LENGTH;
+    });
+    if (onCrossRoad) continue;
     const r = rand();
     if (r < 0.72) {
       items.push({
@@ -378,7 +387,7 @@ export function createHighway(seed = 7): HighwayWorld {
   const tangents = buildTangents(centerline);
   const { cumulativeLengths, totalLength } = buildCumulativeLengths(centerline);
   const intersections = generateIntersections(centerline, tangents);
-  const scenery = generateScenery(centerline, tangents, rand);
+  const scenery = generateScenery(centerline, tangents, rand, intersections);
   const interactives = generateInteractiveBuildings(intersections);
   const collectibles = generateCollectibles(centerline, rand);
   const cityGrid = generateCityGrid();

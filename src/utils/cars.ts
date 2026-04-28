@@ -152,7 +152,7 @@ export function createCrossTraffic(world: World): CrossTrafficCar[] {
           intersectionId: ix.id,
           side,
           progress: queueIdx * 6.4 + Math.random() * 2.4,
-          laneOffset: -side * 0.55,
+          laneOffset: -side * (queueIdx === 0 ? 1.0 : 2.0),
           x: ix.x,
           y: ix.y,
           heading: 0,
@@ -385,6 +385,7 @@ function crossCarAhead(
   for (const other of others) {
     if (other.id === car.id) continue;
     if (other.intersectionId !== car.intersectionId || other.side !== car.side) continue;
+    if (Math.abs(other.laneOffset - car.laneOffset) > 0.5) continue;
     const ahead = other.progress - car.progress;
     if (ahead > 0.05 && ahead < dist) {
       dist = ahead;

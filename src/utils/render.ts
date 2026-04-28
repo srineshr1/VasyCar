@@ -37,6 +37,7 @@ export interface SceneState {
   collectibleStates?: boolean[];
   missionMarker?: { x: number; y: number } | null;
   nearBuildingId?: number | null;
+  waypoint?: { x: number; y: number } | null;
 }
 
 const ASPHALT = '#3a3a42';
@@ -130,7 +131,7 @@ function drawCrossRoads(
 
     // Draw each stub: +normal side and -normal side
     for (const sign of [1, -1]) {
-      const startDist = HRW;
+      const startDist = 0;
       const endDist = CROSS_HALF_LENGTH;
       // 4 corners of asphalt + shoulder band
       const A = { x: x + nx * sign * startDist - tx * HRW, y: y + ny * sign * startDist - ty * HRW };
@@ -150,23 +151,34 @@ function drawCrossRoads(
         drawQuadIso(ctx, [S0A, S0B, S1B, S1A], SHOULDER_COLOR, ox, oy);
       }
 
-      // Outer edge lines
+      // Outer solid yellow edge lines
       for (const sSign of [1, -1]) {
         const ex = laneHalf * sSign;
         const Ea = { x: x + nx * sign * startDist + tx * ex, y: y + ny * sign * startDist + ty * ex };
         const Eb = { x: x + nx * sign * endDist + tx * ex, y: y + ny * sign * endDist + ty * ex };
-        drawLineIso(ctx, Ea.x, Ea.y, Eb.x, Eb.y, EDGE_LINE, 2, ox, oy);
+        drawLineIso(ctx, Ea.x, Ea.y, Eb.x, Eb.y, EDGE_LINE, 2.5, ox, oy);
       }
 
-      // Center dashed line (cross road is 2-way)
-      ctx.setLineDash([6, 6]);
-      const Ca = { x: x + nx * sign * startDist, y: y + ny * sign * startDist };
-      const Cb = { x: x + nx * sign * endDist, y: y + ny * sign * endDist };
-      drawLineIso(ctx, Ca.x, Ca.y, Cb.x, Cb.y, MARKING_COLOR, 2, ox, oy);
-      ctx.setLineDash([]);
+      // Dashed white lane dividers within each direction
+      for (const lSign of [1, -1]) {
+        const lx = (laneHalf - LANE_WIDTH) * lSign;
+        const La = { x: x + nx * sign * startDist + tx * lx, y: y + ny * sign * startDist + ty * lx };
+        const Lb = { x: x + nx * sign * endDist + tx * lx, y: y + ny * sign * endDist + ty * lx };
+        ctx.setLineDash([6, 6]);
+        drawLineIso(ctx, La.x, La.y, Lb.x, Lb.y, MARKING_COLOR, 2, ox, oy);
+        ctx.setLineDash([]);
+      }
+
+      // Double solid yellow median divider
+      for (const mSign of [1, -1]) {
+        const mx = (LANE_WIDTH / 2) * mSign;
+        const Ma = { x: x + nx * sign * startDist + tx * mx, y: y + ny * sign * startDist + ty * mx };
+        const Mb = { x: x + nx * sign * endDist + tx * mx, y: y + ny * sign * endDist + ty * mx };
+        drawLineIso(ctx, Ma.x, Ma.y, Mb.x, Mb.y, EDGE_LINE, 2.5, ox, oy);
+      }
 
       // Stop line (at intersection edge, perpendicular to cross road)
-      const stopDist = startDist + 0.2;
+      const stopDist = HRW + 0.2;
       const SL0 = { x: x + nx * sign * stopDist - tx * laneHalf, y: y + ny * sign * stopDist - ty * laneHalf };
       const SL1 = { x: x + nx * sign * stopDist + tx * laneHalf, y: y + ny * sign * stopDist + ty * laneHalf };
       drawLineIso(ctx, SL0.x, SL0.y, SL1.x, SL1.y, MARKING_COLOR, 3, ox, oy);
@@ -1088,6 +1100,42 @@ export function renderScene(
     ctx.fill();
     ctx.restore();
   }
+
+  if (state.waypoint) {
+    const ws = project(state.waypoint.x, state.waypoint.y, cam, W, H);
+    const pulse = 0.5 + 0.5 * Math.sin(timeS * 3);
+    ctx.save();
+    // Ground ring
+    ctx.globalAlpha = 0.35 * pulse;
+    ctx.fillStyle = '#ffcc00';
+    ctx.beginPath();
+    ctx.ellipse(ws.x, ws.y, 18 + pulse * 6, 9 + pulse * 3, 0, 0, Math.PI * 2);
+    ctx.fill();
+    // Pillar
+    ctx.globalAlpha = 1;
+    ctx.strokeStyle = '#ffcc00';
+    ctx.lineWidth = 3;
+    ctx.shadowColor = '#ffcc00';
+    ctx.shadowBlur = 12;
+    ctx.beginPath();
+    ctx.moveTo(ws.x, ws.y);
+    ctx.lineTo(ws.x, ws.y - 44);
+    ctx.stroke();
+    // Diamond
+    ctx.fillStyle = '#ffcc00';
+    ctx.beginPath();
+    ctx.moveTo(ws.x, ws.y - 56);
+    ctx.lineTo(ws.x + 9, ws.y - 44);
+    ctx.lineTo(ws.x, ws.y - 32);
+    ctx.lineTo(ws.x - 9, ws.y - 44);
+    ctx.closePath();
+    ctx.fill();
+    ctx.shadowBlur = 0;
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+    ctx.restore();
+  }
 }
 
 export function drawMinimap(
@@ -1177,6 +1225,28 @@ export function drawMinimap(
     ctx.lineTo(mx - 4, my);
     ctx.closePath();
     ctx.fill();
+  }
+
+  if (state.waypoint) {
+    const wpx = tx(state.waypoint.x);
+    const wpy = ty(state.waypoint.y);
+    ctx.save();
+    ctx.strokeStyle = '#ffcc00';
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([4, 3]);
+    ctx.beginPath();
+    ctx.moveTo(tx(player.x), ty(player.y));
+    ctx.lineTo(wpx, wpy);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = '#ffcc00';
+    ctx.beginPath();
+    ctx.arc(wpx, wpy, 5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+    ctx.restore();
   }
 
   ctx.fillStyle = '#ff5e8a';

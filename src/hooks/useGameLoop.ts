@@ -59,6 +59,9 @@ export function useGameLoop(
   canvasRef: React.RefObject<HTMLCanvasElement>,
   minimapRef: React.RefObject<HTMLCanvasElement>,
   onHud: (h: HudState) => void,
+  mapCanvasRef?: { current: HTMLCanvasElement | null },
+  waypointRef?: { current: { x: number; y: number } | null },
+  worldBoundsRef?: { current: { minX: number; maxX: number; minY: number; maxY: number } | null },
 ) {
   const refs = useRef<GameRefs | null>(null);
   if (refs.current === null) {
@@ -213,6 +216,12 @@ export function useGameLoop(
         ? r.world.interactives[owResult.nearBuildingId].label
         : null;
 
+      if (worldBoundsRef && !worldBoundsRef.current) {
+        worldBoundsRef.current = r.world.bounds;
+      }
+
+      const waypoint = waypointRef?.current ?? null;
+
       const canvas = canvasRef.current;
       if (canvas) {
         const ctx = canvas.getContext('2d');
@@ -226,6 +235,7 @@ export function useGameLoop(
             collectibleStates: r.ow.collectibleCollected,
             missionMarker: owResult.missionMarker,
             nearBuildingId: owResult.nearBuildingId,
+            waypoint,
           };
           renderScene(ctx, W, H, sceneState);
         }
@@ -239,6 +249,19 @@ export function useGameLoop(
           ai: r.ai, crossTraffic: r.crossTraffic, timeS,
           collectibleStates: r.ow.collectibleCollected,
           missionMarker: owResult.missionMarker,
+          waypoint,
+        });
+      }
+
+      const mapCanvas = mapCanvasRef?.current;
+      if (mapCanvas) {
+        const mctx = mapCanvas.getContext('2d');
+        if (mctx) drawMinimap(mctx, mapCanvas.width, mapCanvas.height, {
+          world: r.world, cache: r.cache, cam: r.camera, player: r.player,
+          ai: r.ai, crossTraffic: r.crossTraffic, timeS,
+          collectibleStates: r.ow.collectibleCollected,
+          missionMarker: owResult.missionMarker,
+          waypoint,
         });
       }
 
