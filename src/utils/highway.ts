@@ -76,10 +76,46 @@ export interface HighwayWorld {
   interactives: InteractiveBuilding[];
   collectibles: Collectible[];
   cityGrid: CityGrid;
+  districts: District[];
+  blockBuildings: BlockBuilding[];
   bounds: { minX: number; maxX: number; minY: number; maxY: number };
 }
 
 export type World = HighwayWorld;
+
+export type DistrictName =
+  | 'downtown'
+  | 'commercial_north'
+  | 'commercial_south'
+  | 'industrial'
+  | 'suburbs'
+  | 'park'
+  | 'countryside';
+
+export interface District {
+  name: DistrictName;
+  label: string;
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+  groundColor: string;
+  mapColor: string;
+  buildingDensity: number;
+  buildingHeightMin: number;
+  buildingHeightMax: number;
+  buildingColors: string[];
+}
+
+export interface BlockBuilding {
+  type: 'building';
+  x: number;
+  y: number;
+  size: number;
+  height: number;
+  color: string;
+  districtName: DistrictName;
+}
 
 const TREE_COLORS = ['#5b8a4a', '#6e9c5a', '#4f7a40', '#7aa66a'];
 const BUILDING_COLORS = ['#d4cfc4', '#c9b8a8', '#bcd0c5', '#cfc1d4', '#d8d0bd', '#b8c5cf'];
@@ -94,10 +130,9 @@ function rng(seed: number): () => number {
 
 function buildCenterline(_rand: () => number): { x: number; y: number }[] {
   // Rectangular ring road: W=90, H=38, corner radius R=14
-  // Starts at (90,-24) = top of right side, travels CW: south → west → north → east
   const W = 90, H = 38, R = 14;
-  const WR = W - R; // 76
-  const HR = H - R; // 24
+  const WR = W - R;
+  const HR = H - R;
   const HP = Math.PI / 2;
   const arcLen = HP * R;
   const N = CENTERLINE_RESOLUTION;
@@ -163,17 +198,186 @@ function buildCumulativeLengths(centerline: { x: number; y: number }[]): {
   return { cumulativeLengths: lengths, totalLength: acc };
 }
 
+export function getDistrictAt(x: number, y: number, districts: District[]): District {
+  for (const d of districts) {
+    if (x >= d.x1 && x <= d.x2 && y >= d.y1 && y <= d.y2) return d;
+  }
+  return districts[districts.length - 1];
+}
+
+function generateDistricts(): District[] {
+  // Non-overlapping zones. Listed outer→inner so downtown draws last.
+  return [
+    {
+      name: 'industrial', label: 'Port Industry',
+      x1: -110, y1: -68, x2: -28, y2: 68,
+      groundColor: '#2a2620', mapColor: '#403830',
+      buildingDensity: 0.55, buildingHeightMin: 0.8, buildingHeightMax: 2.5,
+      buildingColors: ['#7c6c58', '#8a7a62', '#6c5c48', '#9a8a70'],
+    },
+    {
+      name: 'suburbs', label: 'Suburbia',
+      x1: 28, y1: -68, x2: 110, y2: 68,
+      groundColor: '#38402c', mapColor: '#505840',
+      buildingDensity: 0.50, buildingHeightMin: 0.4, buildingHeightMax: 1.2,
+      buildingColors: ['#c8c4b0', '#d4d0bc', '#bcb8a4', '#ccc8b4'],
+    },
+    {
+      name: 'park', label: 'Verdant Park',
+      x1: -28, y1: -68, x2: 28, y2: -38,
+      groundColor: '#243820', mapColor: '#3a5e34',
+      buildingDensity: 0.04, buildingHeightMin: 0.3, buildingHeightMax: 0.6,
+      buildingColors: ['#7a8a6a', '#6a7a5a'],
+    },
+    {
+      name: 'countryside', label: 'Countryside',
+      x1: -28, y1: 38, x2: 28, y2: 68,
+      groundColor: '#2c3c20', mapColor: '#486040',
+      buildingDensity: 0.06, buildingHeightMin: 0.3, buildingHeightMax: 0.5,
+      buildingColors: ['#a09070', '#b0a080'],
+    },
+    {
+      name: 'commercial_north', label: 'Commerce St.',
+      x1: -28, y1: -38, x2: 28, y2: -14,
+      groundColor: '#322e28', mapColor: '#5c5040',
+      buildingDensity: 0.70, buildingHeightMin: 0.6, buildingHeightMax: 2.2,
+      buildingColors: ['#b8a888', '#c4b898', '#a8987c', '#d4c4a8'],
+    },
+    {
+      name: 'commercial_south', label: 'South Market',
+      x1: -28, y1: 14, x2: 28, y2: 38,
+      groundColor: '#2e3228', mapColor: '#485040',
+      buildingDensity: 0.65, buildingHeightMin: 0.5, buildingHeightMax: 1.8,
+      buildingColors: ['#b0b890', '#a8c090', '#98a878', '#c0c8a0'],
+    },
+    {
+      name: 'downtown', label: 'Downtown',
+      x1: -28, y1: -14, x2: 28, y2: 14,
+      groundColor: '#28242e', mapColor: '#4a4560',
+      buildingDensity: 0.85, buildingHeightMin: 1.5, buildingHeightMax: 5.0,
+      buildingColors: ['#8c8aa0', '#7a7890', '#9a9270', '#6e6c80', '#a090a0'],
+    },
+  ];
+}
+
+function isNearRingRoad(x: number, y: number, margin: number): boolean {
+  const W = 90, H = 38;
+  if (Math.abs(x - W) < margin && Math.abs(y) <= H + margin) return true;
+  if (Math.abs(x + W) < margin && Math.abs(y) <= H + margin) return true;
+  if (Math.abs(y - H) < margin && Math.abs(x) <= W + margin) return true;
+  if (Math.abs(y + H) < margin && Math.abs(x) <= W + margin) return true;
+  return false;
+}
+
+function getLotSize(name: DistrictName): number {
+  switch (name) {
+    case 'downtown': return 4.0;
+    case 'commercial_north':
+    case 'commercial_south': return 5.0;
+    case 'industrial': return 7.0;
+    case 'suburbs': return 4.5;
+    default: return 8.0;
+  }
+}
+
+function generateCityBlocks(
+  grid: CityGrid,
+  districts: District[],
+): { x1: number; y1: number; x2: number; y2: number; districtName: DistrictName }[] {
+  const { xLines, yLines, halfWidth, xExtent, yExtent } = grid;
+  const xBounds = [-xExtent, ...xLines, xExtent];
+  const yBounds = [-yExtent, ...yLines, yExtent];
+  const blocks: { x1: number; y1: number; x2: number; y2: number; districtName: DistrictName }[] = [];
+
+  for (let xi = 0; xi < xBounds.length - 1; xi++) {
+    for (let yi = 0; yi < yBounds.length - 1; yi++) {
+      const bx1 = xBounds[xi] + (xLines.includes(xBounds[xi]) ? halfWidth : 0);
+      const bx2 = xBounds[xi + 1] - (xLines.includes(xBounds[xi + 1]) ? halfWidth : 0);
+      const by1 = yBounds[yi] + (yLines.includes(yBounds[yi]) ? halfWidth : 0);
+      const by2 = yBounds[yi + 1] - (yLines.includes(yBounds[yi + 1]) ? halfWidth : 0);
+      if (bx2 - bx1 < 2 || by2 - by1 < 2) continue;
+      const cx = (bx1 + bx2) / 2;
+      const cy = (by1 + by2) / 2;
+      const d = getDistrictAt(cx, cy, districts);
+      blocks.push({ x1: bx1, y1: by1, x2: bx2, y2: by2, districtName: d.name });
+    }
+  }
+  return blocks;
+}
+
+function generateBlockBuildings(
+  blocks: { x1: number; y1: number; x2: number; y2: number; districtName: DistrictName }[],
+  districts: District[],
+  rand: () => number,
+  intersections: Intersection[],
+  interactives: InteractiveBuilding[],
+): BlockBuilding[] {
+  const distMap = new Map(districts.map(d => [d.name, d]));
+  const buildings: BlockBuilding[] = [];
+
+  for (const block of blocks) {
+    const district = distMap.get(block.districtName)!;
+    if (district.buildingDensity === 0) continue;
+
+    const bw = block.x2 - block.x1;
+    const bh = block.y2 - block.y1;
+    const lotSize = getLotSize(block.districtName);
+    const cols = Math.max(1, Math.floor(bw / lotSize));
+    const rows = Math.max(1, Math.floor(bh / lotSize));
+    const lw = bw / cols;
+    const lh = bh / rows;
+
+    for (let col = 0; col < cols; col++) {
+      for (let row = 0; row < rows; row++) {
+        if (rand() > district.buildingDensity) continue;
+
+        const lx = block.x1 + col * lw;
+        const ly = block.y1 + row * lh;
+        const cx = lx + lw / 2 + (rand() - 0.5) * lw * 0.25;
+        const cy = ly + lh / 2 + (rand() - 0.5) * lh * 0.25;
+        const bSize = lotSize * (0.4 + rand() * 0.35);
+        const bHeight =
+          district.buildingHeightMin +
+          rand() * (district.buildingHeightMax - district.buildingHeightMin);
+
+        const margin = HALF_ROAD_WIDTH + bSize + 1.5;
+        if (isNearRingRoad(cx, cy, margin)) continue;
+
+        const onCrossRoad = intersections.some(ix => {
+          const dx = cx - ix.x;
+          const dy = cy - ix.y;
+          const projT = Math.abs(dx * ix.tangentX + dy * ix.tangentY);
+          const projN = Math.abs(dx * ix.normalX + dy * ix.normalY);
+          return projT < HALF_ROAD_WIDTH + bSize + 1 && projN < CROSS_HALF_LENGTH;
+        });
+        if (onCrossRoad) continue;
+
+        const onInteractive = interactives.some(
+          b => Math.hypot(cx - b.x, cy - b.y) < b.size + bSize + 1,
+        );
+        if (onInteractive) continue;
+
+        const color =
+          district.buildingColors[Math.floor(rand() * district.buildingColors.length)];
+        buildings.push({ type: 'building', x: cx, y: cy, size: bSize, height: bHeight, color, districtName: block.districtName });
+      }
+    }
+  }
+  return buildings;
+}
+
 function generateScenery(
   centerline: { x: number; y: number }[],
   tangents: { x: number; y: number }[],
   rand: () => number,
   intersections: Intersection[],
+  districts: District[],
 ): SceneryItem[] {
   const items: SceneryItem[] = [];
   const n = centerline.length;
   const minOff = HALF_ROAD_WIDTH + 1.6;
   const maxOff = HALF_ROAD_WIDTH + 9.0;
-  const numItems = 600;
+  const numItems = 500;
   for (let i = 0; i < numItems; i++) {
     const idx = Math.floor(rand() * n);
     const c = centerline[idx];
@@ -184,6 +388,15 @@ function generateScenery(
     const off = minOff + rand() * (maxOff - minOff);
     const x = c.x + nx * off * side;
     const y = c.y + ny * off * side;
+
+    // Skip dense urban areas — block buildings handle those
+    const d = getDistrictAt(x, y, districts);
+    if (d.name === 'downtown' || d.name === 'commercial_north' || d.name === 'commercial_south') {
+      // consume remaining rand calls for this item so RNG stays consistent
+      rand(); rand(); rand();
+      continue;
+    }
+
     const onCrossRoad = intersections.some((ix) => {
       const dx = x - ix.x;
       const dy = y - ix.y;
@@ -192,6 +405,7 @@ function generateScenery(
       return Math.abs(projT) < HALF_ROAD_WIDTH + 1.6 && Math.abs(projN) < CROSS_HALF_LENGTH;
     });
     if (onCrossRoad) continue;
+
     const r = rand();
     if (r < 0.72) {
       items.push({
@@ -228,6 +442,7 @@ function generateScenery(
 function computeBounds(
   centerline: { x: number; y: number }[],
   scenery: SceneryItem[],
+  districts?: District[],
 ): { minX: number; maxX: number; minY: number; maxY: number } {
   let minX = Infinity;
   let maxX = -Infinity;
@@ -246,6 +461,14 @@ function computeBounds(
     if (s.y - r < minY) minY = s.y - r;
     if (s.y + r > maxY) maxY = s.y + r;
   }
+  if (districts) {
+    for (const d of districts) {
+      if (d.x1 < minX) minX = d.x1;
+      if (d.x2 > maxX) maxX = d.x2;
+      if (d.y1 < minY) minY = d.y1;
+      if (d.y2 > maxY) maxY = d.y2;
+    }
+  }
   const pad = HALF_ROAD_WIDTH + 2;
   return { minX: minX - pad, maxX: maxX + pad, minY: minY - pad, maxY: maxY + pad };
 }
@@ -254,8 +477,6 @@ function generateIntersections(
   centerline: { x: number; y: number }[],
   tangents: { x: number; y: number }[],
 ): Intersection[] {
-  // 8 intersections: right(y=0), bottom(x=60,0,-60), left(y=0), top(x=-60,0,60)
-  // t-values computed from arc-length positions on the rectangular ring road
   const tValues = [0.0492, 0.1762, 0.2992, 0.4221, 0.5492, 0.6762, 0.7992, 0.9221];
   return tValues.map((t, id) => {
     const n = centerline.length;
@@ -326,10 +547,9 @@ export function intersectionAhead(
 }
 
 function generateCityGrid(): CityGrid {
-  // N-S streets at ring intersections; E-W streets inside; extents reach ring boundaries
   return {
-    xLines: [-60, 0, 60],
-    yLines: [-18, 0, 18],
+    xLines: [-60, -30, 0, 30, 60],
+    yLines: [-28, -18, -9, 0, 9, 18, 28],
     halfWidth: 1.5,
     xExtent: 88,
     yExtent: 35,
@@ -383,15 +603,18 @@ function generateCollectibles(centerline: { x: number; y: number }[], rand: () =
 
 export function createHighway(seed = 7): HighwayWorld {
   const rand = rng(seed);
+  const districts = generateDistricts();
   const centerline = buildCenterline(rand);
   const tangents = buildTangents(centerline);
   const { cumulativeLengths, totalLength } = buildCumulativeLengths(centerline);
   const intersections = generateIntersections(centerline, tangents);
-  const scenery = generateScenery(centerline, tangents, rand, intersections);
+  const scenery = generateScenery(centerline, tangents, rand, intersections, districts);
   const interactives = generateInteractiveBuildings(intersections);
   const collectibles = generateCollectibles(centerline, rand);
   const cityGrid = generateCityGrid();
-  const bounds = computeBounds(centerline, scenery);
+  const cityBlocks = generateCityBlocks(cityGrid, districts);
+  const blockBuildings = generateBlockBuildings(cityBlocks, districts, rand, intersections, interactives);
+  const bounds = computeBounds(centerline, scenery, districts);
   return {
     centerline,
     tangents,
@@ -406,6 +629,8 @@ export function createHighway(seed = 7): HighwayWorld {
     interactives,
     collectibles,
     cityGrid,
+    districts,
+    blockBuildings,
     bounds,
   };
 }

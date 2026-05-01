@@ -10,6 +10,9 @@ import {
   InteractiveBuilding,
   Collectible,
   CityGrid,
+  District,
+  BlockBuilding,
+  getDistrictAt,
   highwayLightState,
   crossLightState,
 } from './highway';
@@ -117,6 +120,22 @@ function drawLineIso(
   ctx.stroke();
 }
 
+function drawDistricts(
+  ctx: CanvasRenderingContext2D,
+  districts: District[],
+  ox: number,
+  oy: number,
+): void {
+  for (const d of districts) {
+    drawQuadIso(ctx, [
+      { x: d.x1, y: d.y1 },
+      { x: d.x2, y: d.y1 },
+      { x: d.x2, y: d.y2 },
+      { x: d.x1, y: d.y2 },
+    ], d.groundColor, ox, oy);
+  }
+}
+
 function drawCrossRoads(
   ctx: CanvasRenderingContext2D,
   world: World,
@@ -129,18 +148,15 @@ function drawCrossRoads(
   for (const ix of world.intersections) {
     const { x, y, tangentX: tx, tangentY: ty, normalX: nx, normalY: ny } = ix;
 
-    // Draw each stub: +normal side and -normal side
     for (const sign of [1, -1]) {
       const startDist = 0;
       const endDist = CROSS_HALF_LENGTH;
-      // 4 corners of asphalt + shoulder band
       const A = { x: x + nx * sign * startDist - tx * HRW, y: y + ny * sign * startDist - ty * HRW };
       const B = { x: x + nx * sign * startDist + tx * HRW, y: y + ny * sign * startDist + ty * HRW };
       const C = { x: x + nx * sign * endDist + tx * HRW, y: y + ny * sign * endDist + ty * HRW };
       const D = { x: x + nx * sign * endDist - tx * HRW, y: y + ny * sign * endDist - ty * HRW };
       drawQuadIso(ctx, [A, B, C, D], ASPHALT, ox, oy);
 
-      // Shoulder strips (along each side of the cross road)
       for (const sSign of [1, -1]) {
         const s0 = laneHalf;
         const s1 = HRW;
@@ -151,7 +167,6 @@ function drawCrossRoads(
         drawQuadIso(ctx, [S0A, S0B, S1B, S1A], SHOULDER_COLOR, ox, oy);
       }
 
-      // Outer solid yellow edge lines
       for (const sSign of [1, -1]) {
         const ex = laneHalf * sSign;
         const Ea = { x: x + nx * sign * startDist + tx * ex, y: y + ny * sign * startDist + ty * ex };
@@ -159,7 +174,6 @@ function drawCrossRoads(
         drawLineIso(ctx, Ea.x, Ea.y, Eb.x, Eb.y, EDGE_LINE, 2.5, ox, oy);
       }
 
-      // Dashed white lane dividers within each direction
       for (const lSign of [1, -1]) {
         const lx = (laneHalf - LANE_WIDTH) * lSign;
         const La = { x: x + nx * sign * startDist + tx * lx, y: y + ny * sign * startDist + ty * lx };
@@ -169,7 +183,6 @@ function drawCrossRoads(
         ctx.setLineDash([]);
       }
 
-      // Double solid yellow median divider
       for (const mSign of [1, -1]) {
         const mx = (LANE_WIDTH / 2) * mSign;
         const Ma = { x: x + nx * sign * startDist + tx * mx, y: y + ny * sign * startDist + ty * mx };
@@ -177,21 +190,18 @@ function drawCrossRoads(
         drawLineIso(ctx, Ma.x, Ma.y, Mb.x, Mb.y, EDGE_LINE, 2.5, ox, oy);
       }
 
-      // Stop line (at intersection edge, perpendicular to cross road)
       const stopDist = HRW + 0.2;
       const SL0 = { x: x + nx * sign * stopDist - tx * laneHalf, y: y + ny * sign * stopDist - ty * laneHalf };
       const SL1 = { x: x + nx * sign * stopDist + tx * laneHalf, y: y + ny * sign * stopDist + ty * laneHalf };
       drawLineIso(ctx, SL0.x, SL0.y, SL1.x, SL1.y, MARKING_COLOR, 3, ox, oy);
     }
 
-    // Intersection box (solid asphalt, no markings)
     const IA = { x: x - tx * HRW - nx * HRW, y: y - ty * HRW - ny * HRW };
     const IB = { x: x + tx * HRW - nx * HRW, y: y + ty * HRW - ny * HRW };
     const IC = { x: x + tx * HRW + nx * HRW, y: y + ty * HRW + ny * HRW };
     const ID = { x: x - tx * HRW + nx * HRW, y: y - ty * HRW + ny * HRW };
     drawQuadIso(ctx, [IA, IB, IC, ID], ASPHALT, ox, oy);
 
-    // Stop lines on highway approaches (perpendicular to highway)
     for (const hwSign of [1, -1]) {
       const stopX = x + tx * hwSign * (HRW + 0.2);
       const stopY = y + ty * hwSign * (HRW + 0.2);
@@ -259,7 +269,6 @@ function drawCityGrid(
   const SHOULDER = 0.4;
   const laneEdge = halfWidth - SHOULDER;
 
-  // Horizontal streets (constant y value)
   for (const y0 of yLines) {
     drawQuadIso(ctx, [
       { x: -xExtent, y: y0 - halfWidth },
@@ -281,7 +290,6 @@ function drawCityGrid(
     ctx.setLineDash([]);
   }
 
-  // Vertical streets (constant x value)
   for (const x0 of xLines) {
     drawQuadIso(ctx, [
       { x: x0 - halfWidth, y: -yExtent },
@@ -336,6 +344,7 @@ export function buildBackgroundCache(world: World): RenderCache {
 
   ctx.fillStyle = GRASS_COLOR;
   ctx.fillRect(0, 0, w, h);
+  drawDistricts(ctx, world.districts, offsetX, offsetY);
   drawGrassPattern(ctx, world, offsetX, offsetY);
   drawCityGrid(ctx, world.cityGrid, offsetX, offsetY);
   drawAsphalt(ctx, world, offsetX, offsetY);
@@ -356,6 +365,11 @@ function drawGrassPattern(
   const step = 4;
   for (let gy = world.bounds.minY; gy < world.bounds.maxY; gy += step) {
     for (let gx = world.bounds.minX; gx < world.bounds.maxX; gx += step) {
+      // Skip grass texture in built-up areas
+      if (world.districts) {
+        const d = getDistrictAt(gx, gy, world.districts);
+        if (d.name !== 'park' && d.name !== 'countryside' && d.name !== 'suburbs') continue;
+      }
       const seed = Math.sin(gx * 12.9898 + gy * 78.233) * 43758.5453;
       const r = seed - Math.floor(seed);
       if (r < 0.18) {
@@ -463,13 +477,10 @@ function drawLaneMarkings(
   ox: number,
   oy: number,
 ): void {
-  // Outer solid yellow edges
   drawLineAtOffset(ctx, world, HALF_LANES, ox, oy, false, EDGE_LINE, 2.5);
   drawLineAtOffset(ctx, world, -HALF_LANES, ox, oy, false, EDGE_LINE, 2.5);
-  // Dashed white dividers within each direction (lanes 0-1 and lanes 3-4)
   drawLineAtOffset(ctx, world, HALF_LANES - LANE_WIDTH, ox, oy, true, MARKING_COLOR, 2);
   drawLineAtOffset(ctx, world, -(HALF_LANES - LANE_WIDTH), ox, oy, true, MARKING_COLOR, 2);
-  // Double solid yellow median divider between directions
   drawLineAtOffset(ctx, world, LANE_WIDTH / 2, ox, oy, false, EDGE_LINE, 2.5);
   drawLineAtOffset(ctx, world, -LANE_WIDTH / 2, ox, oy, false, EDGE_LINE, 2.5);
 }
@@ -519,15 +530,12 @@ function drawTree(
   const liftPx = s.height * TILE_H * 1.6;
   const gx = ground.x + ox;
   const gy = ground.y + oy;
-  // shadow
   ctx.fillStyle = 'rgba(0,0,0,0.18)';
   ctx.beginPath();
   ctx.ellipse(gx, gy + 1, TILE_W * 0.22 * s.size, TILE_H * 0.22 * s.size, 0, 0, Math.PI * 2);
   ctx.fill();
-  // trunk
   ctx.fillStyle = '#5b4030';
   ctx.fillRect(gx - 1.5, gy - liftPx * 0.45, 3, liftPx * 0.45);
-  // canopy
   const cR = TILE_W * 0.28 * s.size;
   const cTop = gy - liftPx;
   ctx.fillStyle = shade(s.color, 0.7);
@@ -1006,6 +1014,15 @@ export function renderScene(
     });
   }
 
+  // Block buildings from district generation
+  for (const bb of world.blockBuildings) {
+    if (!sceneryIsVisible(bb as SceneryItem, cam, W, H)) continue;
+    sprites.push({
+      depth: bb.x + bb.y + bb.size,
+      draw: () => drawBuilding(ctx, bb as SceneryItem, spriteOx, spriteOy),
+    });
+  }
+
   for (const ix of world.intersections) {
     const hwState = highwayLightState(ix, timeS);
     const crState = crossLightState(ix, timeS);
@@ -1105,13 +1122,11 @@ export function renderScene(
     const ws = project(state.waypoint.x, state.waypoint.y, cam, W, H);
     const pulse = 0.5 + 0.5 * Math.sin(timeS * 3);
     ctx.save();
-    // Ground ring
     ctx.globalAlpha = 0.35 * pulse;
     ctx.fillStyle = '#ffcc00';
     ctx.beginPath();
     ctx.ellipse(ws.x, ws.y, 18 + pulse * 6, 9 + pulse * 3, 0, 0, Math.PI * 2);
     ctx.fill();
-    // Pillar
     ctx.globalAlpha = 1;
     ctx.strokeStyle = '#ffcc00';
     ctx.lineWidth = 3;
@@ -1121,7 +1136,6 @@ export function renderScene(
     ctx.moveTo(ws.x, ws.y);
     ctx.lineTo(ws.x, ws.y - 44);
     ctx.stroke();
-    // Diamond
     ctx.fillStyle = '#ffcc00';
     ctx.beginPath();
     ctx.moveTo(ws.x, ws.y - 56);
@@ -1157,6 +1171,30 @@ export function drawMinimap(
   const tx = (x: number) => (x - world.bounds.minX) * scale + padding;
   const ty = (y: number) => (y - world.bounds.minY) * scale + padding;
 
+  // District fills
+  for (const d of world.districts) {
+    ctx.fillStyle = d.mapColor;
+    ctx.fillRect(tx(d.x1), ty(d.y1), (d.x2 - d.x1) * scale, (d.y2 - d.y1) * scale);
+  }
+
+  // City grid streets
+  const grid = world.cityGrid;
+  ctx.strokeStyle = '#5a5a6a';
+  ctx.lineWidth = 1;
+  for (const x0 of grid.xLines) {
+    ctx.beginPath();
+    ctx.moveTo(tx(x0), ty(-grid.yExtent));
+    ctx.lineTo(tx(x0), ty(grid.yExtent));
+    ctx.stroke();
+  }
+  for (const y0 of grid.yLines) {
+    ctx.beginPath();
+    ctx.moveTo(tx(-grid.xExtent), ty(y0));
+    ctx.lineTo(tx(grid.xExtent), ty(y0));
+    ctx.stroke();
+  }
+
+  // Ring road
   ctx.strokeStyle = '#7c7c8a';
   ctx.lineWidth = Math.max(2, world.halfRoadWidth * scale * 1.6);
   ctx.lineCap = 'round';
@@ -1169,19 +1207,9 @@ export function drawMinimap(
   }
   ctx.stroke();
 
-  ctx.strokeStyle = '#3a3a44';
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  for (let i = 0; i <= world.centerline.length; i++) {
-    const p = world.centerline[i % world.centerline.length];
-    if (i === 0) ctx.moveTo(tx(p.x), ty(p.y));
-    else ctx.lineTo(tx(p.x), ty(p.y));
-  }
-  ctx.stroke();
-
   for (const ix of world.intersections) {
-    const state = highwayLightState(ix, timeS);
-    ctx.fillStyle = state === 'green' ? '#7ed957' : state === 'yellow' ? '#ffd23f' : '#ff5050';
+    const st = highwayLightState(ix, timeS);
+    ctx.fillStyle = st === 'green' ? '#7ed957' : st === 'yellow' ? '#ffd23f' : '#ff5050';
     ctx.fillRect(tx(ix.x) - 3, ty(ix.y) - 3, 6, 6);
   }
 
@@ -1256,4 +1284,204 @@ export function drawMinimap(
   ctx.strokeStyle = '#ffffff';
   ctx.lineWidth = 1;
   ctx.stroke();
+}
+
+export function drawMapModal(
+  ctx: CanvasRenderingContext2D,
+  w: number,
+  h: number,
+  state: SceneState,
+): void {
+  const { world, player, ai, crossTraffic, timeS } = state;
+
+  ctx.fillStyle = '#12121a';
+  ctx.fillRect(0, 0, w, h);
+
+  const padding = 16;
+  const wx = world.bounds.maxX - world.bounds.minX;
+  const wy = world.bounds.maxY - world.bounds.minY;
+  const scale = Math.min((w - padding * 2) / wx, (h - padding * 2) / wy);
+  const mapW = wx * scale;
+  const mapH = wy * scale;
+  const ox = (w - mapW) / 2;
+  const oy = (h - mapH) / 2;
+  const tx = (x: number) => (x - world.bounds.minX) * scale + ox;
+  const ty = (y: number) => (y - world.bounds.minY) * scale + oy;
+
+  // District fills
+  for (const d of world.districts) {
+    ctx.fillStyle = d.mapColor;
+    ctx.fillRect(tx(d.x1), ty(d.y1), (d.x2 - d.x1) * scale, (d.y2 - d.y1) * scale);
+  }
+
+  // City grid streets
+  const grid = world.cityGrid;
+  const streetW = grid.halfWidth * 2 * scale;
+  ctx.fillStyle = '#5a5a6a';
+  for (const x0 of grid.xLines) {
+    ctx.fillRect(tx(x0 - grid.halfWidth), ty(-grid.yExtent), streetW, grid.yExtent * 2 * scale);
+  }
+  for (const y0 of grid.yLines) {
+    ctx.fillRect(tx(-grid.xExtent), ty(y0 - grid.halfWidth), grid.xExtent * 2 * scale, streetW);
+  }
+
+  // Cross-road stubs
+  ctx.fillStyle = '#6a6a7a';
+  for (const ix of world.intersections) {
+    const stW = HALF_ROAD_WIDTH * 2 * scale;
+    const stL = CROSS_HALF_LENGTH * scale;
+    // Draw in both normal directions
+    for (const sign of [1, -1]) {
+      const sx = tx(ix.x + ix.normalX * sign * CROSS_HALF_LENGTH / 2) - (stW * Math.abs(ix.tangentX) + stL * Math.abs(ix.normalX)) / 2;
+      const sy = ty(ix.y + ix.normalY * sign * CROSS_HALF_LENGTH / 2) - (stW * Math.abs(ix.tangentY) + stL * Math.abs(ix.normalY)) / 2;
+      // Simple cross-road rect approximation
+      const rw = stW * Math.abs(ix.tangentX) + stL * Math.abs(ix.normalX);
+      const rh = stW * Math.abs(ix.tangentY) + stL * Math.abs(ix.normalY);
+      ctx.fillRect(
+        tx(ix.x) + ix.normalX * sign * (stL * 0.05 + HALF_ROAD_WIDTH * scale * 0.5) - (stW * Math.abs(ix.tangentY) + stL * Math.abs(ix.normalX)) / 2,
+        ty(ix.y) + ix.normalY * sign * (stL * 0.05 + HALF_ROAD_WIDTH * scale * 0.5) - (stW * Math.abs(ix.tangentX) + stL * Math.abs(ix.normalY)) / 2,
+        Math.max(2, stW * Math.abs(ix.tangentY) + stL * Math.abs(ix.normalX)),
+        Math.max(2, stW * Math.abs(ix.tangentX) + stL * Math.abs(ix.normalY)),
+      );
+    }
+  }
+
+  // Ring road (thick)
+  ctx.strokeStyle = '#8a8898';
+  ctx.lineWidth = Math.max(3, world.halfRoadWidth * scale * 2);
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  ctx.beginPath();
+  for (let i = 0; i <= world.centerline.length; i++) {
+    const p = world.centerline[i % world.centerline.length];
+    if (i === 0) ctx.moveTo(tx(p.x), ty(p.y));
+    else ctx.lineTo(tx(p.x), ty(p.y));
+  }
+  ctx.stroke();
+
+  // Ring road white center line
+  ctx.strokeStyle = 'rgba(255,255,255,0.18)';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  for (let i = 0; i <= world.centerline.length; i++) {
+    const p = world.centerline[i % world.centerline.length];
+    if (i === 0) ctx.moveTo(tx(p.x), ty(p.y));
+    else ctx.lineTo(tx(p.x), ty(p.y));
+  }
+  ctx.stroke();
+
+  // Intersection lights
+  for (const ix of world.intersections) {
+    const st = highwayLightState(ix, timeS);
+    ctx.fillStyle = st === 'green' ? '#7ed957' : st === 'yellow' ? '#ffd23f' : '#ff5050';
+    ctx.beginPath();
+    ctx.arc(tx(ix.x), ty(ix.y), 4, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // Interactive buildings
+  for (const b of world.interactives) {
+    ctx.fillStyle = INTERACTIVE_COLORS[b.type] ?? '#fff';
+    ctx.fillRect(tx(b.x) - 4, ty(b.y) - 4, 8, 8);
+  }
+
+  // Collectibles
+  if (state.collectibleStates) {
+    ctx.fillStyle = '#ffd700';
+    for (let i = 0; i < world.collectibles.length; i++) {
+      if (state.collectibleStates[i]) continue;
+      const c = world.collectibles[i];
+      ctx.beginPath();
+      ctx.arc(tx(c.x), ty(c.y), 3, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  // AI cars
+  ctx.fillStyle = 'rgba(255,255,255,0.6)';
+  for (const c of ai) {
+    ctx.beginPath();
+    ctx.arc(tx(c.x), ty(c.y), 2.5, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // Cross traffic
+  ctx.fillStyle = 'rgba(180,230,255,0.6)';
+  for (const c of crossTraffic) {
+    ctx.beginPath();
+    ctx.arc(tx(c.x), ty(c.y), 2, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // Mission marker
+  if (state.missionMarker) {
+    const mx = tx(state.missionMarker.x);
+    const my = ty(state.missionMarker.y);
+    ctx.fillStyle = '#ff4444';
+    ctx.beginPath();
+    ctx.moveTo(mx, my - 10);
+    ctx.lineTo(mx + 6, my);
+    ctx.lineTo(mx - 6, my);
+    ctx.closePath();
+    ctx.fill();
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+  }
+
+  // Waypoint
+  if (state.waypoint) {
+    const wpx = tx(state.waypoint.x);
+    const wpy = ty(state.waypoint.y);
+    ctx.save();
+    ctx.strokeStyle = '#ffcc00';
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([5, 4]);
+    ctx.beginPath();
+    ctx.moveTo(tx(player.x), ty(player.y));
+    ctx.lineTo(wpx, wpy);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = '#ffcc00';
+    ctx.beginPath();
+    ctx.arc(wpx, wpy, 6, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // Player dot + heading arrow
+  const px = tx(player.x);
+  const py = ty(player.y);
+  ctx.fillStyle = '#ff5e8a';
+  ctx.beginPath();
+  ctx.arc(px, py, 5, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = '#fff';
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+  ctx.strokeStyle = '#ff5e8a';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(px, py);
+  ctx.lineTo(px + Math.cos(player.heading) * 10, py + Math.sin(player.heading) * 10);
+  ctx.stroke();
+
+  // District labels
+  ctx.font = 'bold 11px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  for (const d of world.districts) {
+    const cx = tx((d.x1 + d.x2) / 2);
+    const cy = ty((d.y1 + d.y2) / 2);
+    const labelW = (d.x2 - d.x1) * scale;
+    const labelH = (d.y2 - d.y1) * scale;
+    if (labelW < 28 || labelH < 12) continue;
+    ctx.fillStyle = 'rgba(0,0,0,0.55)';
+    ctx.fillText(d.label, cx + 1, cy + 1);
+    ctx.fillStyle = 'rgba(255,255,255,0.7)';
+    ctx.fillText(d.label, cx, cy);
+  }
 }

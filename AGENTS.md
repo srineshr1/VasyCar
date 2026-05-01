@@ -24,7 +24,7 @@ npm run preview      # preview production build
 - **`src/utils/cars.ts`** — `PlayerCar` (free-world x/y/heading/speed), `AICar` (parametric `t ∈ [0,1)` + `laneIdx`), `CrossTrafficCar` (drives perpendicular at intersections). AI does lane-keeping, slows for traffic, lane-changes with conflict avoidance, stops at red lights. Cross-traffic respects light phase. Violations: WRONG WAY (heading·tangent dot < 0 for >1.5s) and OFF ROAD (>1s off asphalt). Player collision: axis-aligned obstacle stop-and-friction; off-road applies rumble-strip drag.
 - **`src/utils/gameState.ts`** — open-world state: money, fuel, upgrades, collectibles, missions. Mission types: collect_stars, reach_destination, full_lap. Fuel drains while moving; empty fuel = no throttle. Stuck detection (>3s at low speed) auto-respawns player onto road.
 - **`src/utils/render.ts`** — isometric Canvas 2D. `TILE_W=64`, `TILE_H=32`. Static world (grass, asphalt, shoulders, lane markings, scenery, intersections) is **pre-rasterized once** into an offscreen cache via `buildBackgroundCache()`. Per-frame: blit cache, z-sort and draw cars + traffic-light sprites + collectibles + mission marker. `drawMinimap()` renders a top-down minimap.
-- **`src/components/{GameCanvas,HUD,Minimap}.tsx`** — thin React wrappers; no game logic.
+- **`src/components/{GameCanvas,HUD,Minimap,MapModal}.tsx`** — thin React wrappers; no game logic. `MapModal` renders a full-screen map overlay (toggled by `M`), handles waypoint click.
 
 ### Coordinate systems
 - **World coords**: 1 unit = 1 tile. Origin-centered, includes negatives.
@@ -44,3 +44,4 @@ npm run preview      # preview production build
 - **WASD / Arrow keys** — drive
 - **SPACE** — horn
 - **E** — interact with nearby building (gas station, upgrade shop, garage)
+- **M** — toggle full-screen map (click to set waypoint)
