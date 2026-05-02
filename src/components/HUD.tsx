@@ -4,20 +4,13 @@ interface HUDProps {
   speedKmh: number;
   time: number;
   violation: { active: boolean; message: string; age: number };
-  money: number;
   fuel: number;
   fuelWarning: boolean;
-  missionLabel: string;
-  missionComplete: boolean;
-  nearBuildingLabel: string | null;
+  fps: number;
+  autopilot: boolean;
 }
 
-const HUD: React.FC<HUDProps> = ({
-  speedKmh, time, violation,
-  money, fuel, fuelWarning,
-  missionLabel, missionComplete,
-  nearBuildingLabel,
-}) => {
+const HUD: React.FC<HUDProps> = ({ speedKmh, time, violation, fuel, fuelWarning, fps, autopilot }) => {
   const displaySpeed = Math.round(speedKmh);
   const barPercent = Math.min(100, (displaySpeed / 120) * 100);
   const status = displaySpeed > 2 ? 'drive' : 'idle';
@@ -36,26 +29,17 @@ const HUD: React.FC<HUDProps> = ({
         <span className="ml-2 text-sm font-bold font-mono text-amber-300 tabular-nums">{minutes}:{seconds}</span>
       </div>
 
-      {/* Money — top right */}
-      <div className="absolute top-4 right-4 bg-black/55 backdrop-blur-sm border border-white/15 rounded-lg px-4 py-2 text-white">
-        <span className="text-xs uppercase tracking-widest text-white/55">$</span>
-        <span className="ml-1 text-sm font-bold font-mono text-green-300 tabular-nums">{money}</span>
-      </div>
-
-      {/* Mission — top center */}
-      <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-black/55 backdrop-blur-sm border border-white/15 rounded-lg px-5 py-2 text-white text-center min-w-[180px]">
-        <span className={`text-xs font-semibold tracking-wide ${missionComplete ? 'text-green-400' : 'text-amber-300'}`}>
-          {missionLabel}
-        </span>
-      </div>
-
-      {/* Interaction prompt */}
-      {nearBuildingLabel && (
-        <div className="absolute bottom-36 left-1/2 -translate-x-1/2 bg-black/75 border border-white/25 rounded-lg px-4 py-2 text-white text-sm pointer-events-none">
-          <span className="font-mono bg-white/20 px-1.5 py-0.5 rounded text-xs font-bold">E</span>
-          <span className="ml-2">{nearBuildingLabel}</span>
+      {/* Autopilot badge — top center */}
+      {autopilot && (
+        <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-green-600/90 backdrop-blur-sm border border-green-400/60 rounded-lg px-5 py-1.5 text-white text-xs font-bold tracking-widest uppercase animate-pulse">
+          AUTOPILOT
         </div>
       )}
+
+      {/* FPS — top right */}
+      <div className="absolute top-4 right-4 bg-black/55 backdrop-blur-sm border border-white/15 rounded-lg px-3 py-1.5 text-white">
+        <span className="text-xs font-mono tabular-nums" style={{ color: fps >= 50 ? '#4ade80' : fps >= 30 ? '#fbbf24' : '#f87171' }}>{fps} fps</span>
+      </div>
 
       {/* Speed + fuel cluster — bottom center */}
       <div className="absolute bottom-6 left-1/2 -translate-x-1/2 flex items-end gap-3 pointer-events-none">
@@ -103,7 +87,7 @@ const HUD: React.FC<HUDProps> = ({
       {fuelWarning && (
         <div className="absolute top-24 left-1/2 -translate-x-1/2 pointer-events-none select-none">
           <div className="bg-amber-600/90 border-2 border-white rounded-lg px-6 py-2 text-white text-sm font-bold tracking-widest uppercase animate-pulse">
-            Low Fuel — Find a Gas Station
+            Low Fuel
           </div>
         </div>
       )}
